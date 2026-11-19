@@ -1,0 +1,9 @@
+# Somente bootstrap. Os serviços scheduler/worker serão adicionados no MVP.
+services:
+  bootstrap:
+    profiles: ["bootstrap"]
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    command: ["version"]
+    restart: "no"

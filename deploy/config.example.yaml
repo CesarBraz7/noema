@@ -1,0 +1,37 @@
+app:
+  name: noema
+  timezone: America/Fortaleza
+
+inbox:
+  provider: github
+  repository: CesarBraz7/obsidian-vault
+  file: Inbox/links.md
+  poll_minutes: 15
+  allow_bare_urls: true
+  allow_optional_context: true
+
+scheduling:
+  delayed_jobs_check_minutes: 120
+  recover_on_startup: true
+
+processing:
+  max_concurrent_sources: 1
+  max_concurrent_ai_calls: 1
+  transient_max_attempts: 3
+  browser_fallback_enabled: false
+  checkpoints_enabled: true
+
+ai:
+  free_first: true
+  paid_fallback_enabled: false
+  monthly_budget_usd: 0
+  max_cost_per_source_usd: 0
+
+storage:
+  successful_temp_retention_hours: 48
+  failed_temp_retention_days: 7
+
+knowledge:
+  source_schema_version: "1.0.0"
+  knowledge_schema_version: "1.0.0"
+  protect_personal_notes: true
