@@ -1,6 +1,6 @@
 # Roadmap incremental — Noema
 
-**Este repositório ainda é um bootstrap.** A pipeline deverá ser construída por incrementos testáveis, sem ativar cobranças por padrão.
+A pipeline é construída por incrementos testáveis, sem ativar cobranças por padrão.
 
 ## Fase 0 — Base de desenvolvimento e segurança
 - Manter os três repositórios privados e documentar permissões.

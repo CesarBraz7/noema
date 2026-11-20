@@ -1,9 +1,28 @@
-# Somente bootstrap. Os serviços scheduler/worker serão adicionados no MVP.
 services:
-  bootstrap:
-    profiles: ["bootstrap"]
-    build:
+  noema:
+    build: &noema-build
       context: ..
       dockerfile: deploy/Dockerfile
+    command: ["run"]
+    environment:
+      - DATABASE_URL
+      - GITHUB_OWNER
+      - GITHUB_VAULT_REPO
+      - GITHUB_ARTIFACTS_REPO
+      - GITHUB_TOKEN
+      - GITHUB_VAULT_TOKEN
+      - GITHUB_ARTIFACTS_TOKEN
+    restart: unless-stopped
+    stop_grace_period: 20s
+    mem_limit: 512m
+    cpus: 1
+    logging:
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  bootstrap:
+    profiles: ["bootstrap"]
+    build: *noema-build
     command: ["version"]
     restart: "no"

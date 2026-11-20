@@ -1,7 +1,5 @@
-# Adaptadores de ingestão (a implementar)
+# Adaptadores de ingestão
 
-Contrato futuro em Go: detecção de origem, identificação canônica, extração, normalização e relatório de cobertura.
+A Fase 1 usa Trafilatura para extrair texto e metadados de artigos. O adaptador Go valida o endereço da fonte e os redirecionamentos antes de enviar o HTML à CLI pela entrada padrão.
 
-Ferramentas externas previstas: yt-dlp, gallery-dl, Instaloader, Trafilatura e FFmpeg.
-
-A aplicação não deve executar comandos shell construídos a partir de URLs nem executar navegadores por padrão. Captura parcial precisa ser explicitada.
+Os adaptadores de vídeo e redes sociais entram nas próximas fases do [roadmap](../../docs/ROADMAP.md).

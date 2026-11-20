@@ -1,0 +1,3 @@
+trafilatura==2.0.0
+# jusText imports lxml.html.clean, which is distributed separately from lxml.
+lxml-html-clean==0.4.6
