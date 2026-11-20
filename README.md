@@ -32,22 +32,22 @@ O Noema transforma links em conhecimento rastreável no Obsidian. O primeiro flu
 
 ## Executar a Fase 1
 
-1. Copie `.env.example` para `.env` e configure `DATABASE_URL` com a conexão **direta** do Neon (sem `-pooler`), via TLS. Use `sslmode=verify-full` para validar o certificado e o nome do servidor. A conexão direta é necessária para o River e o lock de sessão do worker.
-2. Configure um token GitHub da conta `CesarBraz7` com `Contents: Read and write` nos dois repositórios de dados. Use `GITHUB_TOKEN` para um único token, ou `GITHUB_VAULT_TOKEN` e `GITHUB_ARTIFACTS_TOKEN` para tokens separados. Os commits da automação são atribuídos pela API do GitHub à conta autenticada.
+1. Após vincular o projeto com `neon init`, rode `neon deploy` para trazer as variáveis do Postgres. O CLI cria `.env.local` ou atualiza `.env` se ele já existir. O Noema prefere `DATABASE_URL_UNPOOLED` e aceita `DATABASE_URL` como alternativa para uma conexão **direta** via TLS. A conexão direta é necessária para o River e o lock de sessão do worker.
+2. No mesmo arquivo de ambiente, configure um token GitHub da conta `CesarBraz7` com `Contents: Read and write` nos dois repositórios de dados. Use `GITHUB_TOKEN` para um único token, ou `GITHUB_VAULT_TOKEN` e `GITHUB_ARTIFACTS_TOKEN` para tokens separados. Os commits da automação são atribuídos pela API do GitHub à conta autenticada.
 3. Adicione um link de artigo ao `Inbox/links.md` no Obsidian e sincronize o vault com o GitHub. O check da caixa é opcional. Use uma linha indentada para acrescentar foco.
-4. Construa a imagem, prepare o banco e rode um primeiro ciclo.
+4. Construa a imagem, prepare o banco e rode um primeiro ciclo. Se o CLI gravou em `.env`, use esse arquivo no argumento `--env-file`.
 
 ```bash
-docker compose --env-file .env -f deploy/compose.yaml build noema
-docker compose --env-file .env -f deploy/compose.yaml run --rm noema migrate
-docker compose --env-file .env -f deploy/compose.yaml run --rm noema once
+docker compose --env-file .env.local -f deploy/compose.yaml build noema
+docker compose --env-file .env.local -f deploy/compose.yaml run --rm noema migrate
+docker compose --env-file .env.local -f deploy/compose.yaml run --rm noema once
 ```
 
 O `once` consulta `Inbox/links.md`, drena os trabalhos elegíveis e encerra. Os comandos abaixo ativam a ingestão contínua e abrem os logs.
 
 ```bash
-docker compose --env-file .env -f deploy/compose.yaml up -d noema
-docker compose --env-file .env -f deploy/compose.yaml logs -f noema
+docker compose --env-file .env.local -f deploy/compose.yaml up -d noema
+docker compose --env-file .env.local -f deploy/compose.yaml logs -f noema
 ```
 
 A inbox é verificada a cada 15 minutos, com ETag. O serviço verifica a fila na inicialização, quando recebe entradas e a cada duas horas para atender retries. O PostgreSQL fica desconectado entre os ciclos. As solicitações, tentativas e erros ficam em `noema_ingestion_requests`.
@@ -56,9 +56,10 @@ A captura `source-content.json` é reutilizada quando o mesmo artigo é reenviad
 
 ## Verificar localmente
 
-Use Go 1.23+ para rodar os testes e consultar a versão.
+Use Go 1.25+ para compilar, rodar os testes e consultar a versão. `npm run build` executa o mesmo build Go para a validação do setup do Neon.
 
 ```bash
+go build ./...
 go test ./...
 go vet ./...
 go run ./cmd/noema version

@@ -18,3 +18,5 @@
 *.mp3
 *.mkv
 *.webm
+.neon
+node_modules/

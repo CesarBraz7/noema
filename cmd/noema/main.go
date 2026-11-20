@@ -35,9 +35,9 @@ func run(ctx context.Context, args []string) error {
 		fmt.Println("noema", version)
 		return nil
 	case "migrate":
-		return pipeline.Migrate(ctx, os.Getenv("DATABASE_URL"))
+		return pipeline.Migrate(ctx, databaseURL())
 	case "once", "run":
-		app, err := pipeline.FromEnv(ctx)
+		app, err := pipeline.FromEnv(ctx, databaseURL())
 		if err != nil {
 			return err
 		}
@@ -49,4 +49,12 @@ func run(ctx context.Context, args []string) error {
 	default:
 		return fmt.Errorf("comando inválido %q. Use noema --help", args[0])
 	}
+}
+
+// River needs a direct Postgres session. Neon supplies both URLs by default.
+func databaseURL() string {
+	if direct := os.Getenv("DATABASE_URL_UNPOOLED"); direct != "" {
+		return direct
+	}
+	return os.Getenv("DATABASE_URL")
 }

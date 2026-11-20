@@ -45,10 +45,9 @@ type App struct {
 	etag      string
 }
 
-func FromEnv(ctx context.Context) (*App, error) {
-	database := os.Getenv("DATABASE_URL")
+func FromEnv(ctx context.Context, database string) (*App, error) {
 	if database == "" {
-		return nil, errors.New("defina DATABASE_URL")
+		return nil, errors.New("defina DATABASE_URL_UNPOOLED ou DATABASE_URL com uma conexão direta")
 	}
 	owner := envDefault("GITHUB_OWNER", "CesarBraz7")
 	vault := envDefault("GITHUB_VAULT_REPO", "obsidian-vault")
@@ -85,7 +84,7 @@ func envDefault(key, fallback string) string {
 
 func openDB(ctx context.Context, database string) (*pgxpool.Pool, error) {
 	if database == "" {
-		return nil, errors.New("defina DATABASE_URL")
+		return nil, errors.New("defina DATABASE_URL_UNPOOLED ou DATABASE_URL com uma conexão direta")
 	}
 	config, err := pgxpool.ParseConfig(database)
 	if err != nil {

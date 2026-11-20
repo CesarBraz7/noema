@@ -6,6 +6,7 @@ services:
     command: ["run"]
     environment:
       - DATABASE_URL
+      - DATABASE_URL_UNPOOLED
       - GITHUB_OWNER
       - GITHUB_VAULT_REPO
       - GITHUB_ARTIFACTS_REPO
