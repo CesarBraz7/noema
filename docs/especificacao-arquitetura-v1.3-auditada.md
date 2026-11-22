@@ -546,7 +546,7 @@ processing:
   transient_max_attempts: 3
   checkpoints_enabled: true
   browser_fallback_enabled: false
-  video_transcription_policy: original_audio_asr_first # requisito; ainda não atendido pelo código
+  # REGRA DE PRODUTO A IMPLEMENTAR: áudio original → ASR como caminho principal.
 
 ai:
   free_first: true
@@ -568,7 +568,7 @@ knowledge:
   protect_personal_notes: true
   auto_publish_new_source_notes: true
   review_conflicting_updates: true
-  cross_source_merge_policy: review_required # provisório, NÃO é decisão final
+  # POLÍTICA EDITORIAL PENDENTE: não mesclar/reformular fontes automaticamente.
 ```
 
 Exemplo de variáveis de ambiente (sem valores secretos no repositório): `DATABASE_URL`, `GITHUB_APP_PRIVATE_KEY` ou token de escopo mínimo, `GITHUB_OWNER`, `GITHUB_VAULT_REPO`, `GITHUB_ARTIFACTS_REPO`, `OCI_BUCKET`, `OCI_REGION`, `GEMINI_API_KEY`, `GROQ_API_KEY`, `OPENROUTER_API_KEY`.
