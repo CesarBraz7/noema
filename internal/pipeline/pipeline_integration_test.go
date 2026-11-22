@@ -341,7 +341,7 @@ func TestArticleFlow(t *testing.T) {
 		t.Run("Gemini", func(t *testing.T) {
 			var calls atomic.Int32
 			audioBefore := audioRuns.Load()
-			start, end, frame := int64(1221200), int64(1223500), int64(1221800)
+			start, end, frame, missingFrame := int64(1221200), int64(1223500), int64(1221800), int64(1257800)
 			app.visual = &visualStage{
 				model: "gemini-test", workDir: t.TempDir(),
 				client: visualAnalyzerFunc(func(_ context.Context, url string, durationMS int64) (gemini.Result, error) {
@@ -355,8 +355,11 @@ func TestArticleFlow(t *testing.T) {
 						Model: "gemini-reported", InteractionID: "gemini-test-id", Usage: &gemini.Usage{InputTokens: 8, OutputTokens: 4, TotalTokens: 12},
 						Analysis: gemini.Analysis{
 							Observations: []gemini.Observation{{Kind: "code", StartMS: &start, EndMS: &end, Description: "Código do checkpoint em tela.", VisibleText: "save(part)"}},
-							FrameChecks:  []gemini.FrameCheck{{AtMS: &frame, Reason: "A linha seguinte está pequena."}},
-							Limitations:  []string{"Parte da tabela ficou ilegível."},
+							FrameChecks: []gemini.FrameCheck{
+								{AtMS: &frame, Reason: "A linha seguinte está pequena."},
+								{AtMS: &missingFrame, Reason: "A legenda da tabela está pequena."},
+							},
+							Limitations: []string{"Parte da tabela ficou ilegível."},
 						},
 					}, nil
 				}),
@@ -366,7 +369,7 @@ func TestArticleFlow(t *testing.T) {
 				var id int64
 				var state string
 				err := db.QueryRow(ctx, "SELECT id, state FROM noema_ingestion_requests WHERE fingerprint = $1",
-					requestFingerprint(sourceID(url), focus, app.visual.version())).Scan(&id, &state)
+					requestFingerprint(sourceID(url), focus, app.visual.requestVersion())).Scan(&id, &state)
 				if err != nil || state != want {
 					t.Fatalf("estado do pedido multimodal = %q, esperado %q (%v)", state, want, err)
 				}
@@ -447,6 +450,72 @@ func TestArticleFlow(t *testing.T) {
 			if got := server.get(notePath(unlisted)); calls.Load() != 2 || !strings.Contains(got, "visibilidade pública confirmada") {
 				t.Fatalf("vídeo sem visibilidade pública tentou análise externa: %q", got)
 			}
+
+			t.Run("Frames", func(t *testing.T) {
+				var framesCaptured, framesAnalyzed atomic.Int32
+				audioBefore := audioRuns.Load()
+				app.visual.extractFrame = func(_ context.Context, _, url, sha string, atMS, durationMS int64) (video.Frame, error) {
+					framesCaptured.Add(1)
+					if url != canonical || sha != digest([]byte(metadataBytes)) || durationMS != 1300000 {
+						t.Errorf("origem de frames inesperada: %s, %s, %d ms", url, sha, durationMS)
+					}
+					if atMS == missingFrame {
+						return video.Frame{}, video.ErrFrameUnavailable
+					}
+					if atMS != frame {
+						t.Errorf("timestamp de frame fora da seleção: %d", atMS)
+					}
+					jpeg := []byte("imagem em teste")
+					return video.Frame{
+						AtMS: atMS, File: fmt.Sprintf("youtube/abcdefghijk/%s/%s/%d.jpg", video.FrameVersion, sha, atMS),
+						SHA256: digest(jpeg), Size: len(jpeg), Width: 1920, Height: 1080, JPEG: jpeg,
+					}, nil
+				}
+				app.visual.frameClient = frameAnalyzerFunc(func(_ context.Context, inputs []gemini.FrameInput, durationMS int64) (gemini.Result, error) {
+					framesAnalyzed.Add(1)
+					if len(inputs) != 1 || inputs[0].Frame.AtMS != frame || inputs[0].Transcript != "Checkpoint de áudio." ||
+						inputs[0].Reason != "A linha seguinte está pequena." || durationMS != 1300000 {
+						t.Errorf("a inspeção recebeu imagens ou transcrição inesperadas: %+v", inputs)
+					}
+					frameEnd := frame + 1
+					return gemini.Result{Model: "gemini-reported", Analysis: gemini.Analysis{
+						Observations: []gemini.Observation{{Kind: "code", StartMS: &frame, EndMS: &frameEnd, Description: "A função grava o segmento.", VisibleText: "save(part)"}},
+						Limitations:  []string{},
+						FrameChecks:  []gemini.FrameCheck{},
+					}}, nil
+				})
+				server.set(inbox, "- "+canonical+"\n")
+				cycleVideos(true)
+				assertState(canonical, "", "COMPLETED")
+				inspectionPath := path.Join("sources", sourceID(canonical),
+					fingerprint(app.visual.requestVersion(), digest([]byte(checkpoint)), visualHash), "video-frame-inspection.json")
+				inspectionJSON := server.get(repoLocation + inspectionPath)
+				var inspection frameInspection
+				if err := json.Unmarshal([]byte(inspectionJSON), &inspection); err != nil || len(inspection.Frames) != 1 ||
+					len(inspection.Missing) != 1 || inspection.Response == nil || len(inspection.Response.Observations) != 1 ||
+					inspection.Response.Observations[0].ID != "f-001" || inspection.Frames[0].AtMS != frame {
+					t.Fatalf("checkpoint de frames inválido: %s (%v)", inspectionJSON, err)
+				}
+				inspectionHash := digest([]byte(inspectionJSON))
+				key := fingerprint(videoVisualConsolidationVersion, digest([]byte(checkpoint)), visualHash, inspectionHash, "")
+				location := repoLocation + path.Join("sources", sourceID(canonical), key, "manifest.json")
+				if err := json.Unmarshal([]byte(server.get(location)), &savedManifest); err != nil || len(savedManifest.Artifacts) != 4 ||
+					savedManifest.Artifacts[2].SHA256 != inspectionHash || len(savedManifest.Artifacts[3].Dependencies) != 3 {
+					t.Fatalf("manifesto de análise e inspeção inválido: %+v (%v)", savedManifest, err)
+				}
+				if got := server.get(notePath(canonical)); !strings.Contains(got, "## Inspeção de frames") ||
+					!strings.Contains(got, "A função grava o segmento.") || !strings.Contains(got, "frame indisponível no trecho solicitado") ||
+					!strings.Contains(got, "[00:20:21.800](<"+canonical+"&t=1221s>)") {
+					t.Fatalf("cobertura da inspeção não está na nota: %q", got)
+				}
+				server.set(inbox, "- "+canonical+"\n  - Foco: a função\n")
+				cycleVideos(true)
+				assertState(canonical, "Foco: a função", "COMPLETED")
+				if calls.Load() != 2 || audioRuns.Load() != audioBefore || framesCaptured.Load() != 2 || framesAnalyzed.Load() != 1 {
+					t.Fatalf("reaproveitamento incompleto: nativo=%d áudio=%d frames=%d análise=%d",
+						calls.Load(), audioRuns.Load()-audioBefore, framesCaptured.Load(), framesAnalyzed.Load())
+				}
+			})
 		})
 	})
 }
@@ -486,6 +555,12 @@ type visualAnalyzerFunc func(context.Context, string, int64) (gemini.Result, err
 
 func (f visualAnalyzerFunc) AnalyzeVideo(ctx context.Context, url string, durationMS int64) (gemini.Result, error) {
 	return f(ctx, url, durationMS)
+}
+
+type frameAnalyzerFunc func(context.Context, []gemini.FrameInput, int64) (gemini.Result, error)
+
+func (f frameAnalyzerFunc) AnalyzeFrames(ctx context.Context, frames []gemini.FrameInput, durationMS int64) (gemini.Result, error) {
+	return f(ctx, frames, durationMS)
 }
 
 type testGitHub struct {

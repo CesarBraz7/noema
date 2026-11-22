@@ -177,6 +177,8 @@ func (w *ingestionWorker) process(ctx context.Context, req request) error {
 		return err
 	}
 	var visual visualRecord
+	var inspection frameInspection
+	var visualRef, inspectionRef artifact
 	var visualSkipped bool
 	inputs := []artifact{captureRef}
 	dependencies := []string{captureRef.SHA256}
@@ -185,23 +187,33 @@ func (w *ingestionWorker) process(ctx context.Context, req request) error {
 		if source.Source.Availability != video.PublicAvailability {
 			visualSkipped = true
 		} else {
-			record, ref, err := w.captureVisual(ctx, req, source, captureRef, root)
+			visual, visualRef, err = w.captureVisual(ctx, req, source, captureRef, root)
 			if err != nil {
 				return err
 			}
-			visual = record
-			inputs = append(inputs, ref)
-			dependencies = append(dependencies, ref.SHA256)
+			inputs = append(inputs, visualRef)
+			dependencies = append(dependencies, visualRef.SHA256)
+			if req.visualVersion != w.visual.version() && len(visual.Response.FrameChecks) != 0 {
+				inspection, inspectionRef, err = w.captureFrameInspection(ctx, source, visual, captureRef, visualRef)
+				if err != nil {
+					return err
+				}
+				inputs = append(inputs, inspectionRef)
+				dependencies = append(dependencies, inspectionRef.SHA256)
+			}
 		}
 	}
 	if err := w.state(ctx, req.id, "CONSOLIDATING", ""); err != nil {
 		return err
 	}
 	knowledge := consolidate(source, req.focus)
-	if len(inputs) == 2 {
-		knowledge.addVisual(visual, inputs[1])
+	if visualRef.Path != "" {
+		knowledge.addVisual(visual, visualRef, inspectionRef.Path != "")
 	} else if visualSkipped {
 		knowledge.Coverage.Unresolved = append(knowledge.Coverage.Unresolved, "A análise externa requer visibilidade pública confirmada pelo YouTube.")
+	}
+	if inspectionRef.Path != "" {
+		knowledge.addFrameInspection(inspection, inspectionRef)
 	}
 	keyParts := append([]string{consolidationKind}, dependencies...)
 	key := fingerprint(append(keyParts, req.focus)...)

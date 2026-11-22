@@ -78,6 +78,8 @@ Use uma chave de um projeto Gemini da camada gratuita, sem faturamento. Configur
 
 Para vídeos com visibilidade pública confirmada, o worker envia a URL canônica ao Gemini após preparar a transcrição. `video-visual.json` registra a resposta estruturada, o modelo informado pelo provedor, o uso de tokens quando fornecido, os intervalos de evidência e as lacunas. A nota reúne evidências da transcrição e da imagem com links para os timestamps. O processamento reaproveita a análise salva quando muda apenas o foco da inbox.
 
+Quando a análise aponta um detalhe visual que precisa de confirmação, o worker baixa um trecho curto e extrai o frame correspondente com FFmpeg. O Gemini recebe os frames selecionados e trechos próximos da transcrição do áudio, quando disponíveis. `video-frame-inspection.json` registra a evidência e os pontos que ficaram sem confirmação. Os JPEGs ficam no diretório local de trabalho com SHA-256 e dimensões registrados no artefato.
+
 Uma resposta HTTP 429 deixa a análise em `WAITING_QUOTA` até o prazo informado pelo provedor, ou até a próxima janela de retry. A configuração padrão usa a captura local de áudio. Quando a visibilidade pública não pode ser confirmada, o worker registra essa limitação na nota e mantém a captura local.
 
 ## Inspecionar um vídeo do YouTube

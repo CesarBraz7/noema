@@ -21,7 +21,7 @@ func RetryVideo(ctx context.Context, database, rawURL string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	visualVersion := visual.version()
+	visualVersion := visual.requestVersion()
 	db, err := openDB(ctx, database)
 	if err != nil {
 		return 0, err

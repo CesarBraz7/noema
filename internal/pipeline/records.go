@@ -149,26 +149,27 @@ func timedBlocks(segments []video.Segment) []block {
 }
 
 type knowledge struct {
-	SchemaVersion string           `json:"schemaVersion"`
-	SourceID      string           `json:"sourceId"`
-	FocusNote     string           `json:"focusNote,omitempty"`
-	Title         string           `json:"title"`
-	Language      string           `json:"language"`
-	Method        string           `json:"method"`
-	Coverage      coverage         `json:"coverage"`
-	Insights      []insight        `json:"insights"`
-	Visual        *visualKnowledge `json:"visual,omitempty"`
+	SchemaVersion   string           `json:"schemaVersion"`
+	SourceID        string           `json:"sourceId"`
+	FocusNote       string           `json:"focusNote,omitempty"`
+	Title           string           `json:"title"`
+	Language        string           `json:"language"`
+	Method          string           `json:"method"`
+	Coverage        coverage         `json:"coverage"`
+	Insights        []insight        `json:"insights"`
+	Visual          *visualKnowledge `json:"visual,omitempty"`
+	FrameInspection *visualKnowledge `json:"frameInspection,omitempty"`
 }
 
 type visualKnowledge struct {
 	Path         string               `json:"artifactPath"`
 	SHA256       string               `json:"artifactSha256"`
 	Mode         string               `json:"analysisMode"`
-	Model        string               `json:"model"`
+	Model        string               `json:"model,omitempty"`
 	Observations []gemini.Observation `json:"observations"`
 }
 
-func (k *knowledge) addVisual(record visualRecord, ref artifact) {
+func (k *knowledge) addVisual(record visualRecord, ref artifact, inspected bool) {
 	k.Visual = &visualKnowledge{
 		Path: ref.Path, SHA256: ref.SHA256, Mode: record.Mode, Model: record.Response.Model,
 		Observations: record.Response.Observations,
@@ -180,13 +181,35 @@ func (k *knowledge) addVisual(record visualRecord, ref artifact) {
 		}
 	}
 	unresolved = append(unresolved, "A análise visual do Gemini usa imagens amostradas ao longo do vídeo.")
-	for _, check := range record.Response.FrameChecks {
-		unresolved = append(unresolved, fmt.Sprintf("Inspeção visual em %s — %s", timestamp(*check.AtMS), check.Reason))
+	if !inspected {
+		for _, check := range record.Response.FrameChecks {
+			unresolved = append(unresolved, fmt.Sprintf("Inspeção visual em %s — %s", timestamp(*check.AtMS), check.Reason))
+		}
 	}
 	if len(record.Response.Observations) == 0 {
 		unresolved = append(unresolved, "O Gemini não retornou evidências visuais verificáveis.")
 	}
 	k.Coverage.Unresolved = append(unresolved, record.Response.Limitations...)
+}
+
+func (k *knowledge) addFrameInspection(record frameInspection, ref artifact) {
+	k.FrameInspection = &visualKnowledge{
+		Path: ref.Path, SHA256: ref.SHA256, Mode: record.Mode, Observations: []gemini.Observation{},
+	}
+	for _, check := range record.Missing {
+		k.Coverage.Unresolved = append(k.Coverage.Unresolved, fmt.Sprintf("Frame em %s — %s", timestamp(*check.AtMS), check.Reason))
+	}
+	if record.Failure != "" {
+		k.Coverage.Unresolved = append(k.Coverage.Unresolved, record.Failure)
+	}
+	if record.Response != nil {
+		k.FrameInspection.Model = record.Response.Model
+		k.FrameInspection.Observations = record.Response.Observations
+		k.Coverage.Unresolved = append(k.Coverage.Unresolved, record.Response.Limitations...)
+		if len(record.Response.Observations) == 0 {
+			k.Coverage.Unresolved = append(k.Coverage.Unresolved, "Os frames inspecionados não confirmaram detalhes visuais adicionais.")
+		}
+	}
 }
 
 type coverage struct {
@@ -368,21 +391,32 @@ func note(source sourceContent, knowledge knowledge, manifestPath string) []byte
 		fmt.Fprintf(&body, "\n> %s\n\n%s · `%s`\n", markdown(insight.Explanation), ref.Locator, ref.SourceBlockID)
 	}
 	if knowledge.Visual != nil {
-		fmt.Fprintf(&body, "\n## Evidências visuais\n\nGemini %s · `%s`\n", markdown(knowledge.Visual.Model), knowledge.Visual.Path)
-		labels := map[string]string{"code": "Código", "slide": "Slide", "diagram": "Diagrama", "table": "Tabela", "demo": "Demonstração", "other": "Imagem"}
-		for _, item := range knowledge.Visual.Observations {
-			fmt.Fprintf(&body, "\n- [%s](<%s&t=%ds>) **%s** · `%s` · %s\n",
-				timestamp(*item.StartMS), source.Source.URL, *item.StartMS/1000, labels[item.Kind], item.ID, markdown(item.Description))
-			if item.VisibleText != "" {
-				fmt.Fprintf(&body, "  - Trecho visível — %s\n", markdown(item.VisibleText))
-			}
-		}
+		writeVisualNote(&body, "Evidências visuais", source.Source.URL, *knowledge.Visual)
+	}
+	if knowledge.FrameInspection != nil {
+		writeVisualNote(&body, "Inspeção de frames", source.Source.URL, *knowledge.FrameInspection)
 	}
 	body.WriteString("\n## Limitações\n\n")
 	for _, limitation := range knowledge.Coverage.Unresolved {
 		fmt.Fprintf(&body, "- %s\n", limitation)
 	}
 	return []byte(body.String())
+}
+
+func writeVisualNote(body *strings.Builder, heading, url string, evidence visualKnowledge) {
+	fmt.Fprintf(body, "\n## %s\n\n", heading)
+	if evidence.Model != "" {
+		fmt.Fprintf(body, "Gemini %s · ", markdown(evidence.Model))
+	}
+	fmt.Fprintf(body, "`%s`\n", evidence.Path)
+	labels := map[string]string{"code": "Código", "slide": "Slide", "diagram": "Diagrama", "table": "Tabela", "demo": "Demonstração", "other": "Imagem"}
+	for _, item := range evidence.Observations {
+		fmt.Fprintf(body, "\n- [%s](<%s&t=%ds>) **%s** · `%s` · %s\n",
+			timestamp(*item.StartMS), url, *item.StartMS/1000, labels[item.Kind], item.ID, markdown(item.Description))
+		if item.VisibleText != "" {
+			fmt.Fprintf(body, "  - Trecho visível — %s\n", markdown(item.VisibleText))
+		}
+	}
 }
 
 var markdownEscaper = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", "\\", "\\\\", "`", "\\`", "[", "\\[", "]", "\\]", "*", "\\*", "_", "\\_", "~", "\\~", "#", "\\#", "!", "\\!", "=", "\\=")

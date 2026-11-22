@@ -24,7 +24,8 @@ O desenvolvimento e a validação funcionam no Windows com Docker Desktop. A esc
 - **Implementado no YouTube** — preservar metadados, áudio, transcrição e timestamps em checkpoints distintos e publicar links para os capítulos fornecidos pelo YouTube. Falhas e restrições ficam registradas.
 - Avaliar a qualidade e o custo de modelos ASR em materiais longos e em português. A imagem local usa Whisper `tiny-q5_1` nesta etapa.
 - **Implementado e testado com API simulada** — integrar Gemini por URL pública, persistir evidências e lacunas com timestamps, registrar uso de tokens e reutilizar checkpoints. Validar com uma chave da camada gratuita e vídeo técnico real.
-- Extrair frames para trechos ambíguos ou visuais essenciais e registrar a cobertura da inspeção.
+- **Implementado** — extrair frames para trechos ambíguos ou visuais essenciais sinalizados pelo Gemini. A inspeção registra a imagem examinada e as lacunas por timestamp.
+- Implementar e validar o modo degradado de frames e transcrição quando a entrada nativa de vídeo for recusada.
 - **Aceite:** vídeo técnico com fala, código e slides gera conhecimento rastreável.
 
 ## Fase 3 — Instagram e X

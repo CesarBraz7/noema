@@ -14,11 +14,12 @@ import (
 var definitions embed.FS
 
 const (
-	Source         = "source-content"
-	Knowledge      = "knowledge"
-	Manifest       = "artifact-manifest"
-	TranscriptPart = "transcript-part"
-	Visual         = "video-visual"
+	Source          = "source-content"
+	Knowledge       = "knowledge"
+	Manifest        = "artifact-manifest"
+	TranscriptPart  = "transcript-part"
+	Visual          = "video-visual"
+	FrameInspection = "video-frame-inspection"
 )
 
 type Validator map[string]*jsonschema.Schema
@@ -27,7 +28,7 @@ func New() (Validator, error) {
 	compiler := jsonschema.NewCompiler()
 	compiler.AssertFormat()
 	validator := make(Validator)
-	for _, name := range []string{Source, Visual, Knowledge, Manifest, TranscriptPart} {
+	for _, name := range []string{Source, Visual, FrameInspection, Knowledge, Manifest, TranscriptPart} {
 		file := name + ".schema.json"
 		data, err := definitions.ReadFile(file)
 		if err != nil {

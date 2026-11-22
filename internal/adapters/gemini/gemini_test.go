@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
+
+	"github.com/CesarBraz7/noema/internal/adapters/video"
 )
 
 const testURL = "https://www.youtube.com/watch?v=abcdefghijk"
@@ -77,6 +79,35 @@ func TestGeminiQuota(t *testing.T) {
 	var quota *QuotaError
 	if !errors.As(err, &quota) || quota.After != 81*time.Second {
 		t.Fatalf("cota inesperada: %v", err)
+	}
+}
+
+func TestAnalyzeFrames(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var request struct {
+			Input []input `json:"input"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&request); err != nil || len(request.Input) != 3 ||
+			request.Input[2].Type != "image" || request.Input[2].MIMEType != "image/jpeg" || string(request.Input[2].Data) != "fixture" {
+			t.Errorf("entrada da inspeção incorreta: %+v (%v)", request, err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		reply(t, w, `{"observations":[{"kind":"code","startMs":1234,"endMs":1235,"description":"Linha visível."}],"limitations":[],"frameChecks":[]}`)
+	}))
+	defer server.Close()
+	client, err := New("fake-gemini-key", "gemini-test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	client.endpoint = server.URL
+	frames := []FrameInput{{Frame: video.Frame{AtMS: 1234, JPEG: []byte("fixture")}}}
+	if result, err := client.AnalyzeFrames(context.Background(), frames, 20000); err != nil || len(result.Observations) != 1 {
+		t.Fatalf("resposta de inspeção = %+v (%v)", result, err)
+	}
+	frames[0].Frame.AtMS++
+	if _, err := client.AnalyzeFrames(context.Background(), frames, 20000); !errors.Is(err, ErrInvalidResponse) {
+		t.Fatalf("evidência de timestamp que não foi enviado passou: %v", err)
 	}
 }
 

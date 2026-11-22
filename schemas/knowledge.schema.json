@@ -10,14 +10,16 @@
     "language": { "const": "pt-BR" },
     "method": { "const": "extractive" },
     "visual": {
-      "type": "object",
-      "required": ["artifactPath", "artifactSha256", "analysisMode", "model", "observations"],
+      "$ref": "#/$defs/visualEvidence",
+      "required": ["model"],
       "properties": {
-        "artifactPath": { "type": "string", "minLength": 1 },
-        "artifactSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
-        "analysisMode": { "const": "youtube-url" },
-        "model": { "$ref": "video-visual.schema.json#/$defs/model" },
-        "observations": { "$ref": "video-visual.schema.json#/$defs/observations" }
+        "analysisMode": { "const": "youtube-url" }
+      }
+    },
+    "frameInspection": {
+      "$ref": "#/$defs/visualEvidence",
+      "properties": {
+        "analysisMode": { "const": "targeted-frames" }
       }
     },
     "coverage": {
@@ -52,6 +54,19 @@
           "confidence": { "const": "supported" },
           "limitations": { "type": "array", "items": { "type": "string" } }
         }
+      }
+    }
+  },
+  "$defs": {
+    "visualEvidence": {
+      "type": "object",
+      "required": ["artifactPath", "artifactSha256", "analysisMode", "observations"],
+      "properties": {
+        "artifactPath": { "type": "string", "minLength": 1 },
+        "artifactSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "analysisMode": { "type": "string", "minLength": 1 },
+        "model": { "$ref": "video-visual.schema.json#/$defs/model" },
+        "observations": { "$ref": "video-visual.schema.json#/$defs/observations" }
       }
     }
   }

@@ -1,0 +1,36 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["schemaVersion", "sourceId", "analysisMode", "visualSha256", "captureSha256", "promptVersion", "extractorVersion", "inspectedAt", "frames", "missing"],
+  "properties": {
+    "schemaVersion": { "const": "1.0.0" },
+    "sourceId": { "type": "string", "pattern": "^youtube-[a-f0-9]{64}$" },
+    "analysisMode": { "const": "targeted-frames" },
+    "visualSha256": { "$ref": "#/$defs/sha256" },
+    "captureSha256": { "$ref": "#/$defs/sha256" },
+    "promptVersion": { "type": "string", "minLength": 1 },
+    "extractorVersion": { "type": "string", "minLength": 1 },
+    "inspectedAt": { "type": "string", "format": "date-time" },
+    "response": { "$ref": "video-visual.schema.json#/properties/response" },
+    "analysisFailure": { "type": "string", "minLength": 1 },
+    "missing": { "$ref": "video-visual.schema.json#/properties/response/properties/frameChecks" },
+    "frames": {
+      "type": "array", "maxItems": 4,
+      "items": {
+        "type": "object",
+        "required": ["atMs", "file", "sha256", "size", "width", "height"],
+        "properties": {
+          "atMs": { "type": "integer", "minimum": 0 },
+          "file": { "type": "string", "pattern": "^youtube/[A-Za-z0-9_-]{11}/[A-Za-z0-9-]+/[a-fA-F0-9]{64}/[0-9]+[.]jpg$" },
+          "sha256": { "$ref": "#/$defs/sha256" },
+          "size": { "type": "integer", "minimum": 1, "maximum": 2097152 },
+          "width": { "type": "integer", "minimum": 1, "maximum": 1920 },
+          "height": { "type": "integer", "minimum": 1, "maximum": 1080 }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+  }
+}

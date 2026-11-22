@@ -55,7 +55,7 @@
         "type": "object",
         "required": ["id", "kind", "startMs", "endMs", "description"],
         "properties": {
-          "id": { "type": "string", "pattern": "^v-[0-9]+$" },
+          "id": { "type": "string", "pattern": "^[vf]-[0-9]+$" },
           "kind": { "enum": ["code", "slide", "diagram", "table", "demo", "other"] },
           "startMs": { "type": "integer", "minimum": 0 },
           "endMs": { "type": "integer", "minimum": 1 },

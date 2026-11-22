@@ -216,7 +216,7 @@ func (a *App) Cycle(ctx context.Context, pollInbox, force bool) error {
 	}
 	defer db.Close()
 	if len(entries) != 0 {
-		if err := enqueue(ctx, db, entries, a.visual.version()); err != nil {
+		if err := enqueue(ctx, db, entries, a.visual.requestVersion()); err != nil {
 			return err
 		}
 		a.etag = etag

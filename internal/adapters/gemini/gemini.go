@@ -21,6 +21,7 @@ import (
 const endpoint = "https://generativelanguage.googleapis.com/v1beta/interactions"
 const apiRevision = "2026-05-20"
 const PromptVersion = "youtube-visual-1"
+const FramePromptVersion = "youtube-frame-inspection-1"
 
 var (
 	ErrAuthorization   = errors.New("Gemini recusou a credencial ou o acesso ao modelo")
@@ -116,9 +117,11 @@ const analysisSchema = `{
 }`
 
 type input struct {
-	Type string `json:"type"`
-	URI  string `json:"uri,omitempty"`
-	Text string `json:"text,omitempty"`
+	Type     string `json:"type"`
+	URI      string `json:"uri,omitempty"`
+	Text     string `json:"text,omitempty"`
+	Data     []byte `json:"data,omitempty"`
+	MIMEType string `json:"mime_type,omitempty"`
 }
 
 func (c *Client) AnalyzeVideo(ctx context.Context, canonical string, durationMS int64) (Result, error) {
@@ -129,6 +132,46 @@ func (c *Client) AnalyzeVideo(ctx context.Context, canonical string, durationMS 
 		{Type: "video", URI: canonical},
 		{Type: "text", Text: fmt.Sprintf("O vídeo dura %d ms. Identifique código, slides, diagramas, tabelas e demonstrações visíveis ao longo do vídeo. Mantenha cada intervalo dentro da duração.", durationMS)},
 	}, durationMS)
+}
+
+type FrameInput struct {
+	Frame      video.Frame
+	Reason     string
+	Transcript string
+}
+
+func (c *Client) AnalyzeFrames(ctx context.Context, frames []FrameInput, durationMS int64) (Result, error) {
+	if len(frames) == 0 || len(frames) > 4 {
+		return Result{}, ErrRejected
+	}
+	content := []input{{Type: "text", Text: "Inspecione somente as imagens fornecidas. Cada imagem corresponde a um único instante e não comprova um intervalo contínuo. Use o timestamp indicado em startMs e seu sucessor em endMs. A fala é contexto da fonte. Liste incertezas em limitations e retorne frameChecks vazio."}}
+	timestamps := make(map[int64]bool, len(frames))
+	for _, item := range frames {
+		frame := item.Frame
+		if frame.AtMS < 0 || frame.AtMS >= durationMS || len(frame.JPEG) == 0 || len(frame.JPEG) > 2<<20 || timestamps[frame.AtMS] {
+			return Result{}, ErrRejected
+		}
+		timestamps[frame.AtMS] = true
+		content = append(content, input{Type: "text", Text: fmt.Sprintf("Frame em %d ms. Questão visual: %s\nFala capturada próxima a esse ponto: %s", frame.AtMS, item.Reason, item.Transcript)},
+			input{Type: "image", Data: frame.JPEG, MIMEType: "image/jpeg"})
+	}
+	result, err := c.analyze(ctx, content, durationMS)
+	if err != nil {
+		return Result{}, err
+	}
+	if len(result.FrameChecks) != 0 || !result.Analysis.MatchesFrames(timestamps) {
+		return Result{}, ErrInvalidResponse
+	}
+	return result, nil
+}
+
+func (a Analysis) MatchesFrames(timestamps map[int64]bool) bool {
+	for _, item := range a.Observations {
+		if item.StartMS == nil || item.EndMS == nil || !timestamps[*item.StartMS] || *item.EndMS != *item.StartMS+1 {
+			return false
+		}
+	}
+	return true
 }
 
 func (c *Client) analyze(ctx context.Context, content []input, durationMS int64) (Result, error) {

@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/CesarBraz7/noema/internal/adapters/gemini"
+	"github.com/CesarBraz7/noema/internal/adapters/video"
 	"github.com/CesarBraz7/noema/internal/storage/local"
 	"github.com/CesarBraz7/noema/schemas"
 )
@@ -26,10 +27,16 @@ type visualAnalyzer interface {
 	AnalyzeVideo(context.Context, string, int64) (gemini.Result, error)
 }
 
+type frameAnalyzer interface {
+	AnalyzeFrames(context.Context, []gemini.FrameInput, int64) (gemini.Result, error)
+}
+
 type visualStage struct {
-	model   string
-	workDir string
-	client  visualAnalyzer
+	model        string
+	workDir      string
+	client       visualAnalyzer
+	frameClient  frameAnalyzer
+	extractFrame func(context.Context, string, string, string, int64, int64) (video.Frame, error)
 }
 
 func visualFromEnv() (*visualStage, error) {
@@ -42,7 +49,10 @@ func visualFromEnv() (*visualStage, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &visualStage{model: model, workDir: envDefault("NOEMA_WORK_DIR", "data"), client: client}, nil
+	return &visualStage{
+		model: model, workDir: envDefault("NOEMA_WORK_DIR", "data"), client: client,
+		frameClient: client, extractFrame: video.ExtractFrame,
+	}, nil
 }
 
 func (v *visualStage) version() string {
@@ -50,6 +60,14 @@ func (v *visualStage) version() string {
 		return ""
 	}
 	return fingerprint("gemini", gemini.PromptVersion, visualURLMode, v.model)
+}
+
+func (v *visualStage) requestVersion() string {
+	native := v.version()
+	if v == nil || v.frameClient == nil || v.extractFrame == nil {
+		return native
+	}
+	return fingerprint(native, gemini.FramePromptVersion, video.FrameVersion)
 }
 
 type visualRecord struct {
@@ -68,7 +86,7 @@ type visualRecord struct {
 }
 
 func (w *ingestionWorker) captureVisual(ctx context.Context, req request, source sourceContent, captureRef artifact, root string) (visualRecord, artifact, error) {
-	if w.visual.version() != req.visualVersion {
+	if w.visual.version() != req.visualVersion && w.visual.requestVersion() != req.visualVersion {
 		return visualRecord{}, artifact{}, fmt.Errorf("%w: %s", errReview, missingVisualConfigReview)
 	}
 	if len(captureRef.Dependencies) == 0 {
@@ -87,47 +105,19 @@ func (w *ingestionWorker) captureVisual(ctx context.Context, req request, source
 		return visualRecord{}, artifact{}, err
 	}
 	metadataSHA := captureRef.Dependencies[0]
-	key := fingerprint(req.visualVersion, metadataSHA, strconv.FormatInt(durationMS, 10))
+	key := fingerprint(w.visual.version(), metadataSHA, strconv.FormatInt(durationMS, 10))
 	location := path.Join(root, key, "video-visual.json")
 	template := visualRecord{
 		SchemaVersion: schemaVersion, SourceID: req.sourceID, URL: req.url, Provider: "gemini", Mode: visualURLMode,
 		Prompt: gemini.PromptVersion, RequestedModel: w.visual.model, MetadataSHA: metadataSHA, DurationMS: durationMS,
 	}
-	file, err := w.artifacts.Get(ctx, location, "")
-	if err != nil {
-		return visualRecord{}, artifact{}, err
-	}
-	if file.Exists {
-		record, err := w.readVisualRecord(file.Data, template)
-		if err != nil {
-			return visualRecord{}, artifact{}, err
-		}
-		ref, err := w.recordArtifact(ctx, req.sourceID, schemas.Visual, location, file.Data, []string{metadataSHA})
-		return record, ref, err
-	}
-	var known bool
-	if err := w.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM noema_artifacts WHERE path = $1)`, location).Scan(&known); err != nil {
-		return visualRecord{}, artifact{}, err
-	}
-	if known {
-		return visualRecord{}, artifact{}, fmt.Errorf("%w: checkpoint de análise visual ausente", errReview)
-	}
-
 	cache := filepath.Join(w.visual.workDir, "video-visual", key+".json")
-	record, err := w.localVisualRecord(ctx, cache, template)
-	if err != nil {
-		return visualRecord{}, artifact{}, err
-	}
-	ref, err := w.putArtifact(ctx, req.sourceID, schemas.Visual, location, record, []string{metadataSHA})
-	return record, ref, err
+	return analysisCheckpoint(w, ctx, req.sourceID, schemas.Visual, location, cache, []string{metadataSHA},
+		func(data []byte) (visualRecord, error) { return w.readVisualRecord(data, template) },
+		func() (visualRecord, error) { return w.analyzeVisualRecord(ctx, template) })
 }
 
-func (w *ingestionWorker) localVisualRecord(ctx context.Context, cache string, template visualRecord) (visualRecord, error) {
-	if data, err := os.ReadFile(cache); err == nil {
-		return w.readVisualRecord(data, template)
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return visualRecord{}, err
-	}
+func (w *ingestionWorker) analyzeVisualRecord(ctx context.Context, template visualRecord) (visualRecord, error) {
 	response, err := w.visual.client.AnalyzeVideo(ctx, template.URL, template.DurationMS)
 	if errors.Is(err, gemini.ErrAuthorization) || errors.Is(err, gemini.ErrRejected) {
 		return visualRecord{}, fmt.Errorf("%w: %w", errReview, err)
@@ -139,16 +129,6 @@ func (w *ingestionWorker) localVisualRecord(ctx context.Context, cache string, t
 		response.Observations[i].ID = fmt.Sprintf("v-%03d", i+1)
 	}
 	template.CapturedAt, template.Response = time.Now().UTC().Truncate(time.Second), response
-	data, err := encodeArtifact(template)
-	if err != nil {
-		return visualRecord{}, err
-	}
-	if _, err := w.readVisualRecord(data, template); err != nil {
-		return visualRecord{}, err
-	}
-	if err := local.PutJSON(cache, template); err != nil {
-		return visualRecord{}, err
-	}
 	return template, nil
 }
 
@@ -166,4 +146,57 @@ func (w *ingestionWorker) readVisualRecord(data []byte, expected visualRecord) (
 		}
 	}
 	return actual, nil
+}
+
+func analysisCheckpoint[T any](w *ingestionWorker, ctx context.Context, sourceID, kind, location, cache string, dependencies []string,
+	read func([]byte) (T, error), analyze func() (T, error),
+) (T, artifact, error) {
+	var record T
+	file, err := w.artifacts.Get(ctx, location, "")
+	if err != nil {
+		return record, artifact{}, err
+	}
+	if file.Exists {
+		record, err = read(file.Data)
+		if err != nil {
+			return record, artifact{}, err
+		}
+		ref, err := w.recordArtifact(ctx, sourceID, kind, location, file.Data, dependencies)
+		return record, ref, err
+	}
+	var known bool
+	if err := w.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM noema_artifacts WHERE path = $1)`, location).Scan(&known); err != nil {
+		return record, artifact{}, err
+	}
+	if known {
+		return record, artifact{}, fmt.Errorf("%w: checkpoint de %s ausente", errReview, kind)
+	}
+
+	data, err := os.ReadFile(cache)
+	if errors.Is(err, os.ErrNotExist) {
+		record, err = analyze()
+		if err != nil {
+			return record, artifact{}, err
+		}
+		data, err = encodeArtifact(record)
+		if err != nil {
+			return record, artifact{}, err
+		}
+		record, err = read(data)
+		if err != nil {
+			return record, artifact{}, err
+		}
+		if err := local.PutJSON(cache, record); err != nil {
+			return record, artifact{}, err
+		}
+	} else if err != nil {
+		return record, artifact{}, err
+	} else {
+		record, err = read(data)
+		if err != nil {
+			return record, artifact{}, err
+		}
+	}
+	ref, err := w.putArtifact(ctx, sourceID, kind, location, record, dependencies)
+	return record, ref, err
 }

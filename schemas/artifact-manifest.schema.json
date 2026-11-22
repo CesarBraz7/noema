@@ -9,16 +9,18 @@
     "pipelineVersion": { "type": "string", "minLength": 1 },
     "extractorVersion": { "type": "string", "minLength": 1 },
     "artifacts": {
-      "type": "array", "minItems": 2, "maxItems": 3,
+      "type": "array", "minItems": 2, "maxItems": 4,
       "allOf": [
         { "contains": { "properties": { "kind": { "const": "source-content" } } }, "maxContains": 1 },
-        { "contains": { "properties": { "kind": { "const": "knowledge" } } }, "maxContains": 1 }
+        { "contains": { "properties": { "kind": { "const": "knowledge" } } }, "maxContains": 1 },
+        { "contains": { "properties": { "kind": { "const": "video-visual" } } }, "minContains": 0, "maxContains": 1 },
+        { "contains": { "properties": { "kind": { "const": "video-frame-inspection" } } }, "minContains": 0, "maxContains": 1 }
       ],
       "items": {
         "type": "object",
         "required": ["kind", "path", "sha256", "size", "dependencies", "validated"],
         "properties": {
-          "kind": { "enum": ["source-content", "knowledge", "video-visual"] },
+          "kind": { "enum": ["source-content", "knowledge", "video-visual", "video-frame-inspection"] },
           "path": { "type": "string", "minLength": 1 },
           "sha256": { "$ref": "#/$defs/sha256" },
           "size": { "type": "integer", "minimum": 1 },
