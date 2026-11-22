@@ -33,15 +33,16 @@ type sourceContent struct {
 }
 
 type metadata struct {
-	URL             string    `json:"url"`
-	ResolvedURL     string    `json:"resolvedUrl,omitempty"`
-	Type            string    `json:"type"`
-	Platform        string    `json:"platform"`
-	Title           string    `json:"title"`
-	Author          string    `json:"author,omitempty"`
-	PublishedAt     string    `json:"publishedAt,omitempty"`
-	CapturedAt      time.Time `json:"capturedAt"`
-	DurationSeconds float64   `json:"durationSeconds,omitempty"`
+	URL             string          `json:"url"`
+	ResolvedURL     string          `json:"resolvedUrl,omitempty"`
+	Type            string          `json:"type"`
+	Platform        string          `json:"platform"`
+	Title           string          `json:"title"`
+	Author          string          `json:"author,omitempty"`
+	PublishedAt     string          `json:"publishedAt,omitempty"`
+	CapturedAt      time.Time       `json:"capturedAt"`
+	DurationSeconds float64         `json:"durationSeconds,omitempty"`
+	Chapters        []video.Chapter `json:"chapters,omitempty"`
 }
 
 type capture struct {
@@ -93,7 +94,7 @@ func newVideoSource(id string, doc video.Capture, now time.Time) sourceContent {
 		Source: metadata{
 			URL: doc.URL, Type: "video", Platform: "youtube", Title: strings.TrimSpace(doc.Title),
 			Author: strings.TrimSpace(doc.Channel), PublishedAt: doc.PublishedAt,
-			CapturedAt: now.UTC().Truncate(time.Second), DurationSeconds: doc.Duration,
+			CapturedAt: now.UTC().Truncate(time.Second), DurationSeconds: doc.Duration, Chapters: doc.Chapters,
 		},
 		Capture: capture{Status: "partial", Method: "yt-dlp", Missing: []string{"Imagem e áudio não foram analisados."}},
 		Blocks:  []block{},
@@ -285,6 +286,13 @@ func note(source sourceContent, knowledge knowledge, manifestPath string) []byte
 	fmt.Fprintf(&body, "- Manifesto de evidências no repositório de artefatos `%s`\n", manifestPath)
 	if knowledge.FocusNote != "" {
 		fmt.Fprintf(&body, "\n## Foco da inbox\n\n%s\n", markdown(knowledge.FocusNote))
+	}
+	if source.Source.Type == "video" && len(source.Source.Chapters) != 0 {
+		body.WriteString("\n## Capítulos\n\n")
+		for _, chapter := range source.Source.Chapters {
+			fmt.Fprintf(&body, "- [%s](<%s&t=%ds>) %s\n", timestamp(chapter.StartMS), source.Source.URL,
+				chapter.StartMS/1000, markdown(chapter.Title))
+		}
 	}
 	heading := "Trechos do artigo"
 	if source.Source.Type == "video" {

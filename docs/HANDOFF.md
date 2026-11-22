@@ -20,6 +20,8 @@ O teste local no Docker usou um vídeo público do TED, PostgreSQL descartável 
 
 O teste de transcrição e retomada usou áudio real do YouTube, PostgreSQL descartável e API GitHub simulada. Rodou no Windows com FFmpeg e Whisper portátil 1.8.6. O pedido retomado ficou em `COMPLETED`, com quatro artefatos e uma nota. A imagem AMD64 com Whisper 1.9.5 foi construída. A validação de execução dessa versão no Docker ficou pendente porque o serviço WSL parou de responder no Windows.
 
+As novas capturas preservam os capítulos retornados pelo YouTube, com início e fim em milissegundos. A nota inclui links para abrir cada capítulo no vídeo. `inspect-video` retornou 30 capítulos de um vídeo real no Windows, e o teste de integração verificou a gravação dos capítulos e os links na nota.
+
 Use `main` para os commits e pushes deste repositório. Para verificar o código no PowerShell, rode os comandos abaixo na raiz do clone.
 
 ```powershell

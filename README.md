@@ -75,7 +75,7 @@ Troque `VIDEO_ID` pelo identificador de um vídeo público e execute no PowerShe
 docker compose -f deploy/compose.yaml run --build --rm noema inspect-video 'https://www.youtube.com/watch?v=VIDEO_ID'
 ```
 
-O comando imprime metadados e uma faixa de legendas em JSON, com início e duração de cada trecho em milissegundos. Ele prioriza legendas manuais e pode usar a faixa automática original quando disponível. `captionsStatus` informa se a legenda foi obtida (`available`), se nenhuma faixa compatível foi encontrada (`unavailable`) ou se a leitura falhou (`fetch_failed`). A inspeção roda sob demanda e requer apenas acesso ao YouTube. Para gravar artefatos e publicar a nota, use a inbox e execute `once`.
+O comando imprime metadados, capítulos disponíveis e uma faixa de legendas em JSON. Os capítulos têm início e fim em milissegundos. Cada trecho de legenda tem início e duração. O comando prioriza legendas manuais e pode usar a faixa automática original. `captionsStatus` informa se a legenda foi obtida (`available`), se nenhuma faixa compatível foi encontrada (`unavailable`) ou se a leitura falhou (`fetch_failed`). Para gravar artefatos e publicar a nota com links para os capítulos, use a inbox e execute `once`.
 
 ## Verificar localmente
 

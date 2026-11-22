@@ -38,8 +38,15 @@ type Capture struct {
 	Channel        string        `json:"channel,omitempty"`
 	Duration       float64       `json:"durationSeconds,omitempty"`
 	PublishedAt    string        `json:"publishedAt,omitempty"`
+	Chapters       []Chapter     `json:"chapters,omitempty"`
 	CaptionsStatus string        `json:"captionsStatus"`
 	Captions       *CaptionTrack `json:"captions,omitempty"`
+}
+
+type Chapter struct {
+	Title   string `json:"title"`
+	StartMS int64  `json:"startMs"`
+	EndMS   int64  `json:"endMs"`
 }
 
 type CaptionTrack struct {
@@ -67,8 +74,15 @@ type metadata struct {
 	UploadDate        string                      `json:"upload_date"`
 	Duration          float64                     `json:"duration"`
 	Language          string                      `json:"language"`
+	Chapters          []chapterMetadata           `json:"chapters"`
 	Subtitles         map[string][]subtitleFormat `json:"subtitles"`
 	AutomaticCaptions map[string][]subtitleFormat `json:"automatic_captions"`
+}
+
+type chapterMetadata struct {
+	Title string   `json:"title"`
+	Start *float64 `json:"start_time"`
+	End   *float64 `json:"end_time"`
 }
 
 func Inspect(ctx context.Context, raw string) (Capture, error) {
@@ -87,7 +101,7 @@ func Inspect(ctx context.Context, raw string) (Capture, error) {
 	cmd := exec.CommandContext(extractCtx, "yt-dlp", "--ignore-config", "--no-plugin-dirs", "--no-cache-dir",
 		"--use-extractors", "youtube", "--no-playlist", "--skip-download", "--ignore-no-formats-error",
 		"--socket-timeout", "15", "--retries", "1",
-		"--print", "%(.{id,title,channel,uploader,upload_date,duration,language,subtitles,automatic_captions})j", "--", canonical)
+		"--print", "%(.{id,title,channel,uploader,upload_date,duration,language,chapters,subtitles,automatic_captions})j", "--", canonical)
 	cmd.Env = extractorEnv(cache)
 	output, err := cmd.Output()
 	switch {
@@ -104,7 +118,7 @@ func Inspect(ctx context.Context, raw string) (Capture, error) {
 	}
 	capture := Capture{
 		ID: id, URL: canonical, Title: meta.Title, Channel: meta.Channel, Duration: meta.Duration,
-		CaptionsStatus: CaptionsUnavailable,
+		CaptionsStatus: CaptionsUnavailable, Chapters: timedChapters(meta.Chapters),
 	}
 	if capture.Channel == "" {
 		capture.Channel = meta.Uploader
@@ -127,6 +141,23 @@ func Inspect(ctx context.Context, raw string) (Capture, error) {
 	capture.CaptionsStatus = CaptionsAvailable
 	capture.Captions = &track
 	return capture, nil
+}
+
+func timedChapters(entries []chapterMetadata) []Chapter {
+	var chapters []Chapter
+	for _, entry := range entries {
+		title := strings.TrimSpace(entry.Title)
+		if title == "" || entry.Start == nil || entry.End == nil ||
+			*entry.Start < 0 || *entry.End <= *entry.Start || *entry.End >= float64(math.MaxInt64)/1000 {
+			continue
+		}
+		start := int64(math.Round(*entry.Start * 1000))
+		end := int64(math.Round(*entry.End * 1000))
+		if end > start {
+			chapters = append(chapters, Chapter{Title: title, StartMS: start, EndMS: end})
+		}
+	}
+	return chapters
 }
 
 func extractorEnv(cache string) []string {

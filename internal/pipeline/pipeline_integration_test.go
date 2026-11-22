@@ -150,6 +150,10 @@ func TestArticleFlow(t *testing.T) {
 				return doc, nil
 			}
 			doc.CaptionsStatus = video.CaptionsAvailable
+			doc.Chapters = []video.Chapter{
+				{Title: "Introdução", StartMS: 0, EndMS: 62120},
+				{Title: "Checkpoints", StartMS: 62120, EndMS: 132000},
+			}
 			doc.Captions = &video.CaptionTrack{
 				Language: "pt-BR", Segments: []video.Segment{
 					{StartMS: 0, DurationMS: 1250, Text: "Abertura."},
@@ -171,7 +175,8 @@ func TestArticleFlow(t *testing.T) {
 		var saved sourceContent
 		if err := json.Unmarshal([]byte(checkpoint), &saved); err != nil || saved.Source.URL != canonical ||
 			saved.Source.Type != "video" || saved.Source.Platform != "youtube" || saved.Capture.CaptionLanguage != "pt-BR" ||
-			saved.Capture.AutomaticCaptions == nil || *saved.Capture.AutomaticCaptions || len(saved.Blocks) != 2 {
+			saved.Capture.AutomaticCaptions == nil || *saved.Capture.AutomaticCaptions || len(saved.Blocks) != 2 ||
+			len(saved.Source.Chapters) != 2 || saved.Source.Chapters[1].StartMS != 62120 {
 			t.Fatalf("captura de vídeo inválida: %s (%v)", checkpoint, err)
 		}
 		first := saved.Blocks[0]
@@ -189,6 +194,10 @@ func TestArticleFlow(t *testing.T) {
 		if got := server.get(videoNote); !strings.Contains(got, "Trechos da legenda") ||
 			!strings.Contains(got, "00:01:02.120–00:01:05.120") || !strings.Contains(got, "`b-002`") {
 			t.Fatalf("nota do vídeo sem evidência temporal: %q", got)
+		}
+		if got := server.get(videoNote); !strings.Contains(got, "## Capítulos") ||
+			!strings.Contains(got, "[00:01:02.120](<"+canonical+"&t=62s>) Checkpoints") {
+			t.Fatalf("nota sem navegação por capítulos: %q", got)
 		}
 		partial := server.get(repoLocation + location(partialID, noCaptions))
 		if !strings.Contains(partial, "Nenhuma legenda compatível disponível.") ||

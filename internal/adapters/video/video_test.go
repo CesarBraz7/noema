@@ -6,6 +6,21 @@ import (
 	"testing"
 )
 
+func TestTimedChapters(t *testing.T) {
+	start, boundary, end := 0.0, 12.6246, 54.25
+	chapters := timedChapters([]chapterMetadata{
+		{Title: " Introdução ", Start: &start, End: &boundary},
+		{Title: "Primeiro bloco", Start: &boundary, End: &end},
+		{Title: "Sem duração", Start: &end},
+		{Title: "Sem intervalo", Start: &end, End: &end},
+	})
+	if len(chapters) != 2 ||
+		chapters[0] != (Chapter{Title: "Introdução", StartMS: 0, EndMS: 12625}) ||
+		chapters[1] != (Chapter{Title: "Primeiro bloco", StartMS: 12625, EndMS: 54250}) {
+		t.Fatalf("capítulos temporais: %+v", chapters)
+	}
+}
+
 func TestParseWhisperTranscript(t *testing.T) {
 	const recording = `{"result":{"language":"pt"},"transcription":[
 		{"offsets":{"from":0,"to":1200},"text":" Olá, mundo."},
