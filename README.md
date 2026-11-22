@@ -6,6 +6,8 @@ O Noema transforma links em conhecimento rastreável no Obsidian. A ingestão co
 
 > **Fase 1.** A ingestão de artigos usa GitHub, PostgreSQL, River OSS e Trafilatura. A síntese seleciona trechos localmente, com referência ao bloco capturado e sem chamadas de IA.
 
+> **Alerta de conformidade (22/11/2026):** o protótipo de vídeos **ainda** prioriza legendas e só extrai o áudio/usa Whisper local quando faltam legendas (limites de 20 min e 64 MiB). Isso contraria a política esclarecida de **áudio original → ASR primeiro**. Veja [auditoria](docs/AUDITORIA-DECISOES-2026-11-22.md) e [especificação auditada](docs/especificacao-arquitetura-v1.3-auditada.md). Não declarar a Fase 2 concluída antes da correção e testes.
+
 ## Repositórios
 
 | Repositório | Papel |
@@ -26,8 +28,9 @@ O Noema transforma links em conhecimento rastreável no Obsidian. A ingestão co
 
 ## Documentos
 
-- [Especificação completa de produto e arquitetura v1.2](docs/especificacao-arquitetura-v1.2.md)
+- [Especificação auditada v1.3](docs/especificacao-arquitetura-v1.3-auditada.md)
 - [Roadmap de implementação](docs/ROADMAP.md)
+- [Auditoria de decisões e correções](docs/AUDITORIA-DECISOES-2026-11-22.md)
 - [Decisões arquiteturais (ADRs)](docs/adr/0001-base-arquitetural.md)
 
 ## Executar a Fase 1
@@ -58,7 +61,7 @@ A captura `source-content.json` é reutilizada quando o mesmo artigo é reenviad
 
 Para vídeos, o worker guarda os metadados e a origem do texto em `source-content.json`, com início e fim de cada trecho em milissegundos. A nota em `Fontes/Vídeos/` referencia esses intervalos. Links equivalentes reaproveitam a captura e o mesmo pedido quando o foco é igual.
 
-Quando o YouTube não oferece uma legenda compatível, a imagem Docker extrai o áudio com FFmpeg e transcreve com Whisper `tiny-q5_1` no próprio contêiner. A implementação atual limita esse fallback a 20 minutos e 64 MiB de áudio para conter o uso de recursos. O limite de duração é provisório. A especificação prevê transcrição em partes para vídeos longos. O Noema conserva os metadados e a transcrição em checkpoints separados e apaga o áudio temporário ao fim de cada tentativa. Se o áudio não puder ser transcrito, o pedido fica em revisão ou registra a restrição de acesso. Falhas temporárias entram nas tentativas do River. [Especificação](docs/especificacao-arquitetura-v1.2.md#82-vídeos-três-responsabilidades-distintas)
+**Comportamento atual provisório, divergente da política corrigida:** quando o YouTube não oferece uma legenda compatível, a imagem Docker extrai o áudio com FFmpeg e transcreve com Whisper `tiny-q5_1` no próprio contêiner. A implementação atual limita esse fallback a 20 minutos e 64 MiB de áudio para conter o uso de recursos. O limite de duração é provisório. A especificação prevê transcrição em partes para vídeos longos. O Noema conserva os metadados e a transcrição em checkpoints separados e apaga o áudio temporário ao fim de cada tentativa. Se o áudio não puder ser transcrito, o pedido fica em revisão ou registra a restrição de acesso. Falhas temporárias entram nas tentativas do River. [Especificação](docs/especificacao-arquitetura-v1.2.md#82-vídeos-três-responsabilidades-distintas)
 
 Para retomar um pedido antigo que ficou em revisão por falta de legenda antes da transcrição local, reenfileire o vídeo e rode um ciclo manual.
 

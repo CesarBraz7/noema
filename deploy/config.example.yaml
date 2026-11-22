@@ -11,6 +11,7 @@ inbox:
   allow_optional_context: true
 
 scheduling:
+  # Valor provisório de engenharia, diferente do polling da inbox de 15 min.
   delayed_jobs_check_minutes: 120
   recover_on_startup: true
 

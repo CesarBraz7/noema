@@ -20,10 +20,9 @@ O desenvolvimento e a validação funcionam no Windows com Docker Desktop. A esc
 - **Aceite:** link de artigo produz nota; reenvio não repete captura desnecessária.
 
 ## Fase 2 — Vídeos
-- Capturar metadados e legendas com timestamps via yt-dlp. O comando manual já roda no Docker local. [Instruções](../README.md#inspecionar-um-vídeo-do-youtube)
-- A fila já recebe vídeos do YouTube, grava as legendas como evidência e publica notas com timestamps. O worker salva metadados para revisão quando faltam legendas.
-- Usar FFmpeg e Whisper local quando faltam legendas. Retomar pedidos antigos de vídeo pelo comando `retry-video`. [Instruções](../README.md#executar-a-fase-1)
-- Transcrever vídeos longos em partes, preservando os timestamps do vídeo completo.
+- **Corrigir o comportamento atual (prioridade):** usar download de mídia/faixa de áudio original e FFmpeg → **ASR primeiro**, com legendas apenas como auxílio/fallback indicado. O código hoje é captions-first e **ainda não atende** a esse requisito.
+- **Remover a limitação de produto não aprovada** de 20 minutos / 64 MiB e não fixar Whisper `tiny-q5_1` como padrão definitivo. Testar vídeo longo com chunking ou provedor compatível.
+- Preserve os metadados, áudio, transcrição e timestamps em checkpoints distintos; não declarar cobertura integral quando houver falha ou restrição.
 - Preservar os capítulos fornecidos pelo YouTube e publicar links para seus timestamps nas notas.
 - Criar análise multimodal com Gemini quando disponível e inspeção adicional de frames quando necessária.
 - Persistir resultados e custos por etapa e reutilizar artefatos compatíveis.
@@ -45,4 +44,4 @@ O desenvolvimento e a validação funcionam no Windows com Docker Desktop. A esc
 - Proteger notas pessoais e sinalizar contradições para revisão.
 - **Aceite:** fontes de plataformas diferentes contribuem para conceitos associados.
 
-Referência: [Especificação v1.2](especificacao-arquitetura-v1.2.md).
+Referência vigente: [Especificação v1.3 auditada](especificacao-arquitetura-v1.3-auditada.md) · [Auditoria](AUDITORIA-DECISOES-2026-11-22.md).

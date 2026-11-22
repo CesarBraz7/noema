@@ -1,6 +1,8 @@
 > **Projeto:** Noema | versão de arquitetura 1.2 (documento de referência)
 > **Repositórios:** [core](https://github.com/CesarBraz7/noema), [artefatos](https://github.com/CesarBraz7/noema-artifacts), [vault](https://github.com/CesarBraz7/obsidian-vault).
 
+> ⚠️ **V1.2 SUBSTITUÍDA:** contém decisões não aprovadas/sem rastreabilidade. Use a [especificação auditada v1.3](especificacao-arquitetura-v1.3-auditada.md) e a [auditoria](AUDITORIA-DECISOES-2026-11-22.md). A prioridade de legendas e parâmetros de ASR do protótipo não são requisitos aprovados.
+
 # Noema — Especificação de Produto e Arquitetura Técnica
 
 > **Versão:** 1.2 — proposta consolidada para implementação  
