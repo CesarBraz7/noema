@@ -62,7 +62,7 @@ func (v *visualStage) version() string {
 	return fingerprint("gemini", gemini.PromptVersion, visualURLMode, v.model)
 }
 
-func (v *visualStage) requestVersion() string {
+func (v *visualStage) inspectionVersion() string {
 	native := v.version()
 	if v == nil || v.frameClient == nil || v.extractFrame == nil {
 		return native
@@ -70,23 +70,33 @@ func (v *visualStage) requestVersion() string {
 	return fingerprint(native, gemini.FramePromptVersion, video.FrameVersion)
 }
 
+func (v *visualStage) requestVersion() string {
+	inspection := v.inspectionVersion()
+	if inspection == v.version() {
+		return inspection
+	}
+	return fingerprint(inspection, fallbackFramesMode)
+}
+
 type visualRecord struct {
-	SchemaVersion  string        `json:"schemaVersion"`
-	SourceID       string        `json:"sourceId"`
-	URL            string        `json:"sourceUrl"`
-	Provider       string        `json:"provider"`
-	Mode           string        `json:"analysisMode"`
-	Prompt         string        `json:"promptVersion"`
-	RequestedModel string        `json:"requestedModel"`
-	MetadataSHA    string        `json:"metadataSha256"`
-	DurationMS     int64         `json:"durationMs"`
-	CapturedAt     time.Time     `json:"analyzedAt"`
-	BudgetUSD      int           `json:"budgetUsd"`
-	Response       gemini.Result `json:"response"`
+	SchemaVersion  string         `json:"schemaVersion"`
+	SourceID       string         `json:"sourceId"`
+	URL            string         `json:"sourceUrl"`
+	Provider       string         `json:"provider"`
+	Mode           string         `json:"analysisMode"`
+	Prompt         string         `json:"promptVersion"`
+	RequestedModel string         `json:"requestedModel"`
+	MetadataSHA    string         `json:"metadataSha256"`
+	DurationMS     int64          `json:"durationMs"`
+	CapturedAt     time.Time      `json:"analyzedAt"`
+	BudgetUSD      int            `json:"budgetUsd"`
+	Response       *gemini.Result `json:"response,omitempty"`
+	Unavailable    string         `json:"nativeUnavailable,omitempty"`
 }
 
 func (w *ingestionWorker) captureVisual(ctx context.Context, req request, source sourceContent, captureRef artifact, root string) (visualRecord, artifact, error) {
-	if w.visual.version() != req.visualVersion && w.visual.requestVersion() != req.visualVersion {
+	if w.visual.version() != req.visualVersion && w.visual.inspectionVersion() != req.visualVersion &&
+		w.visual.requestVersion() != req.visualVersion {
 		return visualRecord{}, artifact{}, fmt.Errorf("%w: %s", errReview, missingVisualConfigReview)
 	}
 	if len(captureRef.Dependencies) == 0 {
@@ -119,6 +129,11 @@ func (w *ingestionWorker) captureVisual(ctx context.Context, req request, source
 
 func (w *ingestionWorker) analyzeVisualRecord(ctx context.Context, template visualRecord) (visualRecord, error) {
 	response, err := w.visual.client.AnalyzeVideo(ctx, template.URL, template.DurationMS)
+	template.CapturedAt = time.Now().UTC().Truncate(time.Second)
+	if errors.Is(err, gemini.ErrNativeVideo) {
+		template.Unavailable = gemini.ErrNativeVideo.Error()
+		return template, nil
+	}
 	if errors.Is(err, gemini.ErrAuthorization) || errors.Is(err, gemini.ErrRejected) {
 		return visualRecord{}, fmt.Errorf("%w: %w", errReview, err)
 	}
@@ -128,7 +143,7 @@ func (w *ingestionWorker) analyzeVisualRecord(ctx context.Context, template visu
 	for i := range response.Observations {
 		response.Observations[i].ID = fmt.Sprintf("v-%03d", i+1)
 	}
-	template.CapturedAt, template.Response = time.Now().UTC().Truncate(time.Second), response
+	template.Response = &response
 	return template, nil
 }
 
@@ -137,8 +152,17 @@ func (w *ingestionWorker) readVisualRecord(data []byte, expected visualRecord) (
 	if w.validator.Validate(schemas.Visual, data) != nil || json.Unmarshal(data, &actual) != nil ||
 		actual.SourceID != expected.SourceID || actual.URL != expected.URL || actual.MetadataSHA != expected.MetadataSHA ||
 		actual.Mode != expected.Mode || actual.Prompt != expected.Prompt || actual.RequestedModel != expected.RequestedModel ||
-		actual.DurationMS != expected.DurationMS || !actual.Response.Valid(actual.DurationMS) {
+		actual.DurationMS != expected.DurationMS {
 		return visualRecord{}, fmt.Errorf("%w: checkpoint de análise visual inválido", errReview)
+	}
+	if actual.Response == nil {
+		if actual.Unavailable != gemini.ErrNativeVideo.Error() {
+			return visualRecord{}, fmt.Errorf("%w: rejeição de vídeo sem diagnóstico reconhecido", errReview)
+		}
+		return actual, nil
+	}
+	if !actual.Response.Valid(actual.DurationMS) {
+		return visualRecord{}, fmt.Errorf("%w: evidências visuais inválidas", errReview)
 	}
 	for i, observation := range actual.Response.Observations {
 		if observation.ID != fmt.Sprintf("v-%03d", i+1) {
@@ -173,7 +197,8 @@ func analysisCheckpoint[T any](w *ingestionWorker, ctx context.Context, sourceID
 	}
 
 	data, err := os.ReadFile(cache)
-	if errors.Is(err, os.ErrNotExist) {
+	missing := errors.Is(err, os.ErrNotExist)
+	if missing {
 		record, err = analyze()
 		if err != nil {
 			return record, artifact{}, err
@@ -182,18 +207,15 @@ func analysisCheckpoint[T any](w *ingestionWorker, ctx context.Context, sourceID
 		if err != nil {
 			return record, artifact{}, err
 		}
-		record, err = read(data)
-		if err != nil {
-			return record, artifact{}, err
-		}
-		if err := local.PutJSON(cache, record); err != nil {
-			return record, artifact{}, err
-		}
 	} else if err != nil {
 		return record, artifact{}, err
-	} else {
-		record, err = read(data)
-		if err != nil {
+	}
+	record, err = read(data)
+	if err != nil {
+		return record, artifact{}, err
+	}
+	if missing {
+		if err := local.PutJSON(cache, record); err != nil {
 			return record, artifact{}, err
 		}
 	}

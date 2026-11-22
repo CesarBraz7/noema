@@ -19,7 +19,7 @@
     "frameInspection": {
       "$ref": "#/$defs/visualEvidence",
       "properties": {
-        "analysisMode": { "const": "targeted-frames" }
+        "analysisMode": { "enum": ["targeted-frames", "frames-transcript-fallback"] }
       }
     },
     "coverage": {

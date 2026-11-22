@@ -193,13 +193,15 @@ func (w *ingestionWorker) process(ctx context.Context, req request) error {
 			}
 			inputs = append(inputs, visualRef)
 			dependencies = append(dependencies, visualRef.SHA256)
-			if req.visualVersion != w.visual.version() && len(visual.Response.FrameChecks) != 0 {
-				inspection, inspectionRef, err = w.captureFrameInspection(ctx, source, visual, captureRef, visualRef)
+			if req.visualVersion != w.visual.version() {
+				inspection, inspectionRef, err = w.captureFrameInspection(ctx, source, visual, captureRef, visualRef, req.visualVersion == w.visual.requestVersion())
 				if err != nil {
 					return err
 				}
-				inputs = append(inputs, inspectionRef)
-				dependencies = append(dependencies, inspectionRef.SHA256)
+				if inspectionRef.Path != "" {
+					inputs = append(inputs, inspectionRef)
+					dependencies = append(dependencies, inspectionRef.SHA256)
+				}
 			}
 		}
 	}

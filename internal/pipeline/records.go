@@ -170,16 +170,15 @@ type visualKnowledge struct {
 }
 
 func (k *knowledge) addVisual(record visualRecord, ref artifact, inspected bool) {
+	if record.Response == nil {
+		k.Coverage.Unresolved = append(k.Coverage.Unresolved, record.Unavailable+".")
+		return
+	}
 	k.Visual = &visualKnowledge{
 		Path: ref.Path, SHA256: ref.SHA256, Mode: record.Mode, Model: record.Response.Model,
 		Observations: record.Response.Observations,
 	}
-	unresolved := k.Coverage.Unresolved[:0]
-	for _, item := range k.Coverage.Unresolved {
-		if item != "Imagem não foi analisada." && item != "A imagem não foi analisada." {
-			unresolved = append(unresolved, item)
-		}
-	}
+	unresolved := withoutImageLimitation(k.Coverage.Unresolved)
 	unresolved = append(unresolved, "A análise visual do Gemini usa imagens amostradas ao longo do vídeo.")
 	if !inspected {
 		for _, check := range record.Response.FrameChecks {
@@ -190,6 +189,16 @@ func (k *knowledge) addVisual(record visualRecord, ref artifact, inspected bool)
 		unresolved = append(unresolved, "O Gemini não retornou evidências visuais verificáveis.")
 	}
 	k.Coverage.Unresolved = append(unresolved, record.Response.Limitations...)
+}
+
+func withoutImageLimitation(items []string) []string {
+	kept := items[:0]
+	for _, item := range items {
+		if item != "Imagem não foi analisada." && item != "A imagem não foi analisada." {
+			kept = append(kept, item)
+		}
+	}
+	return kept
 }
 
 func (k *knowledge) addFrameInspection(record frameInspection, ref artifact) {
@@ -203,6 +212,10 @@ func (k *knowledge) addFrameInspection(record frameInspection, ref artifact) {
 		k.Coverage.Unresolved = append(k.Coverage.Unresolved, record.Failure)
 	}
 	if record.Response != nil {
+		if record.Mode == fallbackFramesMode {
+			k.Coverage.Unresolved = append(withoutImageLimitation(k.Coverage.Unresolved),
+				"A cobertura visual do fallback se limita aos instantes dos frames selecionados.")
+		}
 		k.FrameInspection.Model = record.Response.Model
 		k.FrameInspection.Observations = record.Response.Observations
 		k.Coverage.Unresolved = append(k.Coverage.Unresolved, record.Response.Limitations...)
@@ -394,7 +407,11 @@ func note(source sourceContent, knowledge knowledge, manifestPath string) []byte
 		writeVisualNote(&body, "Evidências visuais", source.Source.URL, *knowledge.Visual)
 	}
 	if knowledge.FrameInspection != nil {
-		writeVisualNote(&body, "Inspeção de frames", source.Source.URL, *knowledge.FrameInspection)
+		heading := "Inspeção de frames"
+		if knowledge.FrameInspection.Mode == fallbackFramesMode {
+			heading = "Modo parcial com frames e transcrição"
+		}
+		writeVisualNote(&body, heading, source.Source.URL, *knowledge.FrameInspection)
 	}
 	body.WriteString("\n## Limitações\n\n")
 	for _, limitation := range knowledge.Coverage.Unresolved {

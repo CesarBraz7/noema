@@ -410,7 +410,7 @@ func TestArticleFlow(t *testing.T) {
 			visualPath := path.Join("sources", sourceID(canonical), fingerprint(app.visual.version(), digest([]byte(metadataBytes)), "1300000"), "video-visual.json")
 			visualJSON := server.get(repoLocation + visualPath)
 			var record visualRecord
-			if err := json.Unmarshal([]byte(visualJSON), &record); err != nil || record.Response.Model != "gemini-reported" ||
+			if err := json.Unmarshal([]byte(visualJSON), &record); err != nil || record.Response == nil || record.Response.Model != "gemini-reported" ||
 				record.Mode != "youtube-url" || record.Response.Usage == nil || record.Response.Usage.InputTokens != 8 ||
 				len(record.Response.Observations) != 1 || record.Response.Observations[0].ID != "v-001" {
 				t.Fatalf("evidência visual inválida: %s (%v)", visualJSON, err)
@@ -488,7 +488,7 @@ func TestArticleFlow(t *testing.T) {
 				cycleVideos(true)
 				assertState(canonical, "", "COMPLETED")
 				inspectionPath := path.Join("sources", sourceID(canonical),
-					fingerprint(app.visual.requestVersion(), digest([]byte(checkpoint)), visualHash), "video-frame-inspection.json")
+					fingerprint(app.visual.inspectionVersion(), digest([]byte(checkpoint)), visualHash), "video-frame-inspection.json")
 				inspectionJSON := server.get(repoLocation + inspectionPath)
 				var inspection frameInspection
 				if err := json.Unmarshal([]byte(inspectionJSON), &inspection); err != nil || len(inspection.Frames) != 1 ||
@@ -514,6 +514,63 @@ func TestArticleFlow(t *testing.T) {
 				if calls.Load() != 2 || audioRuns.Load() != audioBefore || framesCaptured.Load() != 2 || framesAnalyzed.Load() != 1 {
 					t.Fatalf("reaproveitamento incompleto: nativo=%d áudio=%d frames=%d análise=%d",
 						calls.Load(), audioRuns.Load()-audioBefore, framesCaptured.Load(), framesAnalyzed.Load())
+				}
+			})
+
+			t.Run("Fallback", func(t *testing.T) {
+				const url = "https://www.youtube.com/watch?v=99999555551"
+				var nativeCalls, framesCaptured, framesAnalyzed atomic.Int32
+				app.discoverVideo = func(_ context.Context, raw string) (video.Capture, error) {
+					return video.Capture{URL: raw, Title: "Tela de um tutorial", Duration: 1300, Availability: video.PublicAvailability,
+						Chapters: []video.Chapter{
+							{Title: "Introdução", StartMS: 0, EndMS: 1600},
+							{Title: "Demonstração", StartMS: 1221000, EndMS: 1223400},
+						}}, nil
+				}
+				app.visual.client = visualAnalyzerFunc(func(_ context.Context, raw string, durationMS int64) (gemini.Result, error) {
+					nativeCalls.Add(1)
+					if raw != url || durationMS != 1300000 {
+						t.Errorf("pedido de vídeo inesperado: %s em %d ms", raw, durationMS)
+					}
+					return gemini.Result{}, gemini.ErrNativeVideo
+				})
+				app.visual.extractFrame = func(_ context.Context, _, raw, sha string, atMS, _ int64) (video.Frame, error) {
+					framesCaptured.Add(1)
+					if raw != url || (atMS != 800 && atMS != 1222200) {
+						t.Errorf("amostra de fallback não veio dos capítulos: %s em %d ms", raw, atMS)
+					}
+					jpeg := []byte("frame de fallback")
+					return video.Frame{
+						AtMS: atMS, File: fmt.Sprintf("youtube/99999555551/%s/%s/%d.jpg", video.FrameVersion, sha, atMS),
+						SHA256: digest(jpeg), Size: len(jpeg), Width: 1280, Height: 720, JPEG: jpeg,
+					}, nil
+				}
+				app.visual.frameClient = frameAnalyzerFunc(func(_ context.Context, frames []gemini.FrameInput, _ int64) (gemini.Result, error) {
+					framesAnalyzed.Add(1)
+					if len(frames) != 2 || frames[1].Transcript != "Checkpoint de áudio." || frames[1].Reason != "Imagem no capítulo Demonstração" {
+						t.Errorf("contexto de fallback inesperado: %+v", frames)
+					}
+					start, end := int64(1222200), int64(1222201)
+					return gemini.Result{Model: "gemini-reported", Analysis: gemini.Analysis{
+						Observations: []gemini.Observation{{Kind: "demo", StartMS: &start, EndMS: &end, Description: "O terminal exibe o retorno da função."}},
+						Limitations:  []string{},
+						FrameChecks:  []gemini.FrameCheck{},
+					}}, nil
+				})
+				server.set(inbox, "- "+url+"\n")
+				cycleVideos(true)
+				assertState(url, "", "COMPLETED")
+				if got := server.get(notePath(url)); !strings.Contains(got, "Modo parcial com frames e transcrição") ||
+					!strings.Contains(got, "O terminal exibe o retorno da função.") ||
+					!strings.Contains(got, "cobertura visual do fallback se limita") || strings.Contains(got, "## Evidências visuais") {
+					t.Fatalf("o modo degradado não está identificado na nota: %q", got)
+				}
+				server.set(inbox, "- "+url+"\n  - Foco: terminal\n")
+				cycleVideos(true)
+				assertState(url, "Foco: terminal", "COMPLETED")
+				if nativeCalls.Load() != 1 || framesCaptured.Load() != 2 || framesAnalyzed.Load() != 1 {
+					t.Fatalf("fallback repetiu operações: nativo=%d, frames=%d, análise=%d",
+						nativeCalls.Load(), framesCaptured.Load(), framesAnalyzed.Load())
 				}
 			})
 		})

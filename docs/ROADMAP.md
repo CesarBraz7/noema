@@ -25,7 +25,7 @@ O desenvolvimento e a validação funcionam no Windows com Docker Desktop. A esc
 - Avaliar a qualidade e o custo de modelos ASR em materiais longos e em português. A imagem local usa Whisper `tiny-q5_1` nesta etapa.
 - **Implementado e testado com API simulada** — integrar Gemini por URL pública, persistir evidências e lacunas com timestamps, registrar uso de tokens e reutilizar checkpoints. Validar com uma chave da camada gratuita e vídeo técnico real.
 - **Implementado** — extrair frames para trechos ambíguos ou visuais essenciais sinalizados pelo Gemini. A inspeção registra a imagem examinada e as lacunas por timestamp.
-- Implementar e validar o modo degradado de frames e transcrição quando a entrada nativa de vídeo for recusada.
+- **Implementado e testado com API simulada** — usar frames e transcrição em modo degradado quando o provedor indicar incompatibilidade com a entrada nativa. A nota explicita os limites da amostragem.
 - **Aceite:** vídeo técnico com fala, código e slides gera conhecimento rastreável.
 
 ## Fase 3 — Instagram e X

@@ -5,7 +5,7 @@
   "properties": {
     "schemaVersion": { "const": "1.0.0" },
     "sourceId": { "type": "string", "pattern": "^youtube-[a-f0-9]{64}$" },
-    "analysisMode": { "const": "targeted-frames" },
+    "analysisMode": { "enum": ["targeted-frames", "frames-transcript-fallback"] },
     "visualSha256": { "$ref": "#/$defs/sha256" },
     "captureSha256": { "$ref": "#/$defs/sha256" },
     "promptVersion": { "type": "string", "minLength": 1 },

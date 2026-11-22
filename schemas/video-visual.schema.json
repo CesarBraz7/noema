@@ -1,7 +1,11 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "type": "object",
-  "required": ["schemaVersion", "sourceId", "sourceUrl", "provider", "analysisMode", "promptVersion", "requestedModel", "metadataSha256", "durationMs", "analyzedAt", "budgetUsd", "response"],
+  "required": ["schemaVersion", "sourceId", "sourceUrl", "provider", "analysisMode", "promptVersion", "requestedModel", "metadataSha256", "durationMs", "analyzedAt", "budgetUsd"],
+  "oneOf": [
+    { "required": ["response"] },
+    { "required": ["nativeUnavailable"] }
+  ],
   "properties": {
     "schemaVersion": { "const": "1.0.0" },
     "sourceId": { "type": "string", "pattern": "^youtube-[a-f0-9]{64}$" },
@@ -14,6 +18,7 @@
     "durationMs": { "type": "integer", "minimum": 1 },
     "analyzedAt": { "type": "string", "format": "date-time" },
     "budgetUsd": { "const": 0 },
+    "nativeUnavailable": { "type": "string", "minLength": 1 },
     "response": {
       "type": "object",
       "required": ["model", "observations", "limitations", "frameChecks"],

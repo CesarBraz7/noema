@@ -80,6 +80,8 @@ Para vídeos com visibilidade pública confirmada, o worker envia a URL canônic
 
 Quando a análise aponta um detalhe visual que precisa de confirmação, o worker baixa um trecho curto e extrai o frame correspondente com FFmpeg. O Gemini recebe os frames selecionados e trechos próximos da transcrição do áudio, quando disponíveis. `video-frame-inspection.json` registra a evidência e os pontos que ficaram sem confirmação. Os JPEGs ficam no diretório local de trabalho com SHA-256 e dimensões registrados no artefato.
 
+Se o Gemini indicar que a entrada nativa é incompatível e houver transcrição do áudio original, o worker inspeciona até quatro frames escolhidos pelos capítulos ou distribuídos pela duração do vídeo. A nota identifica o modo parcial e os timestamps que têm evidência. A rejeição por incompatibilidade fica salva para reaproveitamento com novos focos.
+
 Uma resposta HTTP 429 deixa a análise em `WAITING_QUOTA` até o prazo informado pelo provedor, ou até a próxima janela de retry. A configuração padrão usa a captura local de áudio. Quando a visibilidade pública não pode ser confirmada, o worker registra essa limitação na nota e mantém a captura local.
 
 ## Inspecionar um vídeo do YouTube

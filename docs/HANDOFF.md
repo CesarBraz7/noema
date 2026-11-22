@@ -20,6 +20,8 @@ A análise visual optativa usa a URL pública no Gemini e registra evidências, 
 
 A inspeção direcionada extrai frames nos pontos indicados pela análise visual. Um teste no Docker com vídeo público confirmou a extração por trecho com yt-dlp e FFmpeg. O teste com APIs simuladas cobre o envio de um frame com contexto da transcrição, o registro de um frame indisponível e o reaproveitamento da análise e da inspeção em outro foco.
 
+O fallback de frames e transcrição registra a incompatibilidade da entrada nativa, mantém a evidência do áudio original e marca a cobertura parcial na nota. O teste de integração cobre a escolha de frames pelos capítulos e a retomada com um segundo foco. A qualidade da análise com vídeo técnico real ainda depende do projeto Gemini configurado.
+
 No Docker Desktop, com PostgreSQL descartável e API GitHub simulada, o worker processou um vídeo público do TED de 20min03s que tinha legenda disponível. O pedido chegou a `COMPLETED` com cinco segmentos de áudio, 323 trechos transcritos pelo Whisper e zero consultas a legendas pelo worker. Um pedido com outro foco reutilizou a transcrição. O teste de integração também verificou a retomada de um pedido barrado pelo limite antigo, o fallback declarado e o tratamento de restrições de acesso.
 
 As novas capturas preservam os capítulos retornados pelo YouTube, com início e fim em milissegundos. A nota inclui links para abrir cada capítulo no vídeo. `inspect-video` retornou 30 capítulos de um vídeo real no Windows, e o teste de integração verificou a gravação dos capítulos e os links na nota.

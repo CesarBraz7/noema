@@ -111,6 +111,35 @@ func TestAnalyzeFrames(t *testing.T) {
 	}
 }
 
+func TestNativeVideoRejection(t *testing.T) {
+	for _, tt := range []struct {
+		status  int
+		message string
+		want    error
+	}{
+		{http.StatusBadRequest, "The selected model does not support video input.", ErrNativeVideo},
+		{http.StatusBadRequest, "Only public YouTube URLs are supported.", ErrRejected},
+		{http.StatusBadRequest, "Invalid response_format.schema.", ErrRejected},
+		{http.StatusForbidden, "Video input is not supported.", ErrAuthorization},
+	} {
+		t.Run(tt.message, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tt.status)
+				_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"message": tt.message}})
+			}))
+			defer server.Close()
+			client, err := New("fake-gemini-key", "gemini-test")
+			if err != nil {
+				t.Fatal(err)
+			}
+			client.endpoint = server.URL
+			if _, err := client.AnalyzeVideo(context.Background(), testURL, 20000); !errors.Is(err, tt.want) {
+				t.Fatalf("classificação = %v, esperava %v", err, tt.want)
+			}
+		})
+	}
+}
+
 func reply(t *testing.T, w http.ResponseWriter, output string) {
 	t.Helper()
 	resp := map[string]any{

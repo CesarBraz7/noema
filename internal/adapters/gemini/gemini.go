@@ -26,6 +26,7 @@ const FramePromptVersion = "youtube-frame-inspection-1"
 var (
 	ErrAuthorization   = errors.New("Gemini recusou a credencial ou o acesso ao modelo")
 	ErrRejected        = errors.New("Gemini não aceitou a análise visual")
+	ErrNativeVideo     = errors.New("Gemini informou que a entrada nativa de vídeo é incompatível")
 	ErrInvalidResponse = errors.New("resposta de análise visual inválida do Gemini")
 	validModel         = regexp.MustCompile(`^gemini-[a-z0-9][a-z0-9.-]*$`)
 )
@@ -202,7 +203,7 @@ func (c *Client) analyze(ctx context.Context, content []input, durationMS int64)
 	const maxResponse = 1 << 20
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse+1))
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return Result{}, statusError(resp, data)
+		return Result{}, statusError(resp, data, content[0].Type == "video")
 	}
 	if err != nil || len(data) > maxResponse {
 		return Result{}, ErrInvalidResponse
@@ -291,7 +292,7 @@ func (a Analysis) Valid(durationMS int64) bool {
 	return true
 }
 
-func statusError(resp *http.Response, data []byte) error {
+func statusError(resp *http.Response, data []byte, nativeVideo bool) error {
 	switch resp.StatusCode {
 	case http.StatusTooManyRequests:
 		header := resp.Header.Get("Retry-After")
@@ -321,8 +322,33 @@ func statusError(resp *http.Response, data []byte) error {
 	case http.StatusUnauthorized, http.StatusForbidden:
 		return ErrAuthorization
 	case http.StatusBadRequest, http.StatusNotFound, http.StatusUnprocessableEntity:
+		if nativeVideo && resp.StatusCode != http.StatusNotFound && incompatibleVideoInput(data) {
+			return ErrNativeVideo
+		}
 		return fmt.Errorf("%w (HTTP %d)", ErrRejected, resp.StatusCode)
 	default:
 		return fmt.Errorf("Gemini respondeu com HTTP %d", resp.StatusCode)
 	}
+}
+
+func incompatibleVideoInput(data []byte) bool {
+	var body struct {
+		Error struct {
+			Message string `json:"message"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(data, &body) != nil {
+		return false
+	}
+	message := strings.ToLower(body.Error.Message)
+	for _, phrase := range []string{
+		"video input is not supported", "video inputs are not supported", "does not support video input",
+		"unsupported video input", "youtube url is not supported", "youtube urls are not supported",
+		"does not support youtube urls", "unsupported input modality: video",
+	} {
+		if strings.Contains(message, phrase) {
+			return true
+		}
+	}
+	return false
 }
