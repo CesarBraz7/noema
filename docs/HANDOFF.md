@@ -1,45 +1,29 @@
-# Handoff do Noema para validação no Windows
+# Handoff do Noema para validação na OCI
 
-O primeiro fluxo do Noema está implementado. A próxima sessão deve aplicar a migração no Neon a partir do computador de César e processar um artigo real. O Windows já alcançou o endpoint do banco na porta `5432` por IPv6. A conexão autenticada a partir do Docker ainda precisa ser testada.
+O fluxo de ingestão de artigos foi validado no Windows em 22 de novembro de 2026, com Docker Desktop, Neon e os dois repositórios privados do GitHub. O próximo passo é executar a imagem em uma VM ARM64 da OCI.
 
-## Estado do projeto
+## Validação concluída
 
-- Repositório principal privado `CesarBraz7/noema`. Faça os commits e pushes na branch `main`. Os commits `17ef36d` e `10217c6` contêm a ingestão e a integração com o Neon.
-- O worker lê `Inbox/links.md`, deduplica URLs, extrai o texto com Trafilatura e seleciona citações localmente. O River usa PostgreSQL. Os artefatos JSON vão para `CesarBraz7/noema-artifacts`, e as notas Markdown vão para `CesarBraz7/obsidian-vault`. A publicação preserva edições manuais. [README](../README.md)
-- O projeto Neon `winter-band-81069553`, branch `production`, já existe. O `neon deploy` confirmou o Postgres e baixou as variáveis para o `.env.local` do Codex Cloud. Na última consulta ao Neon por HTTPS, as tabelas `river_job` e `noema_ingestion_requests` ainda não existiam. A porta `5432` foi recusada no Cloud.
-- O fluxo passou com PostgreSQL 16, River e Trafilatura reais e uma API GitHub simulada. Também passaram a migração local com TLS e `channel_binding=require` e o build Docker AMD64. O primeiro ciclo com o Neon e os repositórios privados será a validação de produção.
+- A migração rodou pelo Docker Compose na branch `production` do projeto Neon `winter-band-81069553`, usando a conexão direta com TLS e `channel_binding=require`. Uma consulta ao banco confirmou as tabelas do Noema e do River, incluindo `noema_ingestion_requests` e `river_job`.
+- O ciclo manual processou [Fixing For Loops in Go 1.22](https://go.dev/blog/loopvar-preview) na primeira tentativa. O pedido ficou em `COMPLETED`. A captura, a consolidação e o manifesto foram publicados no repositório de artefatos. A nota no vault aponta para o manifesto e os blocos de evidência. [Manifesto](https://github.com/CesarBraz7/noema-artifacts/blob/main/sources/web-9c90a4a8d65bb59512d6c5943af256cef67c631afc2f106dcfb2d7c15451e453/14cda71ceb05d0fca7392f7f3a7d740422d2bbaaa5ef78781521ce8313277a92/manifest.json) · [Nota no vault](https://github.com/CesarBraz7/obsidian-vault/blob/main/Fontes/Artigos/web-9c90a4a8d65bb59512d6c5943af256cef67c631afc2f106dcfb2d7c15451e453.md)
+- O reenvio com `utm_source` manteve uma fonte, um pedido, os mesmos três artefatos e a mesma nota. A [inbox](https://github.com/CesarBraz7/obsidian-vault/blob/main/Inbox/links.md) ficou com a URL canônica do artigo de teste.
+- Passaram `go test ./...`, `go vet ./...`, o teste de integração com PostgreSQL 16 descartável e o build Docker AMD64.
+- A imagem Docker `linux/arm64` rodou localmente por emulação. O contêiner reportou `aarch64`, e funcionaram `noema version`, `trafilatura --version` e `noema once` com as conexões de produção. Falta repetir a validação na VM ARM64 da OCI.
 
-## Preparar a sessão local
+A conexão do Neon foi salva em `.env.local` no clone do Windows, ignorado pelo Git. Os ciclos manuais usaram a credencial GitHub de `CesarBraz7` do Git Credential Manager apenas no ambiente do processo. Para o worker contínuo, configure um token da conta `CesarBraz7` com `Contents: Read and write` nos dois repositórios de dados.
 
-Se for clonar o repositório no Windows, execute no PowerShell dentro da pasta onde quer guardar o projeto e abra a pasta `noema` em uma sessão **Local** do Codex Desktop.
+## Validar na OCI ARM64
 
-```powershell
-git clone --branch main https://github.com/CesarBraz7/noema.git
-cd noema
-```
+1. Acesse a VM ARM64 por SSH, sincronize a branch `main` de `CesarBraz7/noema` e confirme que ela tem Docker e Compose. Faça os commits e pushes deste repositório em `main`.
+2. Configure `.env.local` na raiz do clone com `DATABASE_URL_UNPOOLED` da branch `production` e o token GitHub do worker. As variáveis aceitas estão no [README](../README.md#executar-a-fase-1).
+3. Construa a imagem na VM, confirme o runtime ARM64 e rode a migração idempotente e um ciclo manual para validar as conexões com Neon e GitHub.
 
-Se já tiver uma cópia, confirme que está com a árvore limpa, execute `git switch main` e atualize com `git pull --ff-only origin main`.
-
-No painel do Neon, abra **Connect** na branch `production` com **Connection pooling** desativado. Crie `.env.local` na raiz do clone e salve a URL direta inteira na variável `DATABASE_URL_UNPOOLED`, incluindo os parâmetros TLS e channel binding fornecidos pelo Neon. O arquivo e as credenciais do Codex Cloud ficam no ambiente anterior. Mantenha a URL real no arquivo local ignorado pelo Git. [Conexão no Neon](https://neon.com/docs/connect/connect-from-any-app)
-
-## Aplicar a migração
-
-Com o Docker Desktop iniciado, execute na raiz do Noema.
-
-```powershell
-docker compose --env-file .env.local -f deploy/compose.yaml run --build --rm noema migrate
-```
-
-O comando deve sair com código `0` e criar as tabelas do Noema e do River. A migração precisa apenas do banco. Caso o Docker falhe ao conectar e o PowerShell continue alcançando o endpoint, teste a migração no Windows com Go 1.25 ou posterior. Carregue a mesma `DATABASE_URL_UNPOOLED` no ambiente do processo sem imprimir a credencial e execute `go run ./cmd/noema migrate`. Se funcionar no host, confira a conectividade do Docker Desktop antes de iniciar o worker nele.
-
-## Validar o primeiro artigo
-
-1. Configure no `.env.local` `GITHUB_TOKEN`, ou `GITHUB_VAULT_TOKEN` e `GITHUB_ARTIFACTS_TOKEN`, com permissão de leitura e escrita de conteúdo nos repositórios privados de dados. O token deve ser da conta `CesarBraz7` para atribuir os commits da aplicação a ela.
-2. Adicione um link de artigo público a `Inbox/links.md` no vault e sincronize o arquivo com o GitHub.
-3. Execute um ciclo manual. Verifique a saída do comando, os três artefatos e a nota em `Fontes/Artigos/`. Reenvie a mesma URL com um parâmetro `utm_` e confirme que ele reaproveita a captura.
-
-```powershell
+```bash
+docker compose --env-file .env.local -f deploy/compose.yaml build noema
+docker compose --env-file .env.local -f deploy/compose.yaml run --rm noema version
+docker compose --env-file .env.local -f deploy/compose.yaml run --rm --entrypoint trafilatura noema --version
+docker compose --env-file .env.local -f deploy/compose.yaml run --rm noema migrate
 docker compose --env-file .env.local -f deploy/compose.yaml run --rm noema once
 ```
 
-Depois desse teste, valide a execução da imagem na VM OCI ARM64 e use o modo contínuo quando estiver pronto para deixar a ingestão ativa. [Instruções de operação](../README.md#executar-a-fase-1)
+O worker contínuo pode ser iniciado na VM depois dessa validação. [Instruções de operação](../README.md#executar-a-fase-1)
