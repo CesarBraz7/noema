@@ -38,13 +38,14 @@ const (
 var repositoryName = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_.-]*$`)
 
 type App struct {
-	database     string
-	vault        *github.Repository
-	artifacts    *github.Repository
-	extractor    articleExtractor
-	inspectVideo func(context.Context, string) (video.Capture, error)
-	validator    schemas.Validator
-	etag         string
+	database        string
+	vault           *github.Repository
+	artifacts       *github.Repository
+	extractor       articleExtractor
+	inspectVideo    func(context.Context, string) (video.Capture, error)
+	transcribeVideo func(context.Context, video.Capture) (video.Transcript, error)
+	validator       schemas.Validator
+	etag            string
 }
 
 func FromEnv(ctx context.Context, database string) (*App, error) {
@@ -70,11 +71,15 @@ func FromEnv(ctx context.Context, database string) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &App{
+	app := &App{
 		database: database, validator: validator, extractor: extractor, inspectVideo: video.Inspect,
 		vault:     github.New("https://api.github.com", owner, vault, vaultToken),
 		artifacts: github.New("https://api.github.com", owner, artifacts, artifactsToken),
-	}, nil
+	}
+	if model, err := os.Stat(video.WhisperModelPath); err == nil && model.Mode().IsRegular() {
+		app.transcribeVideo = video.Transcribe
+	}
+	return app, nil
 }
 
 func envDefault(key, fallback string) string {
@@ -228,7 +233,8 @@ func enqueue(ctx context.Context, db *pgxpool.Pool, entries []inbox.Entry) error
 			if err != nil {
 				return err
 			}
-			if _, err := client.InsertTx(ctx, tx, ingestionJob{RequestID: requestID}, &river.InsertOpts{Queue: queueName, MaxAttempts: 3}); err != nil {
+			job := ingestionJob{RequestID: requestID, Transcribe: entry.Video}
+			if _, err := client.InsertTx(ctx, tx, job, &river.InsertOpts{Queue: queueName, MaxAttempts: 3}); err != nil {
 				return err
 			}
 		}
@@ -262,6 +268,11 @@ func (a *App) drain(ctx context.Context, db *pgxpool.Pool) (err error) {
 		FROM river_job j
 		WHERE j.kind = $1 AND j.queue = $2 AND j.state IN ('discarded', 'cancelled')
 		AND r.id = (j.args->>'requestId')::bigint
+		AND NOT EXISTS (
+			SELECT 1 FROM river_job newer
+			WHERE newer.kind = j.kind AND newer.queue = j.queue AND newer.id > j.id
+			AND newer.args->>'requestId' = j.args->>'requestId'
+		)
 		AND r.state IN ('PENDING', 'CAPTURING', 'CONSOLIDATING', 'PUBLISHING', 'RETRY_SCHEDULED')`, (ingestionJob{}).Kind(), queueName)
 	return err
 }
@@ -276,7 +287,8 @@ func closeSession(conn *pgxpool.Conn) {
 func (a *App) work(ctx context.Context, db *pgxpool.Pool) (err error) {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &ingestionWorker{
-		db: db, vault: a.vault, artifacts: a.artifacts, extractor: a.extractor, inspectVideo: a.inspectVideo, validator: a.validator,
+		db: db, vault: a.vault, artifacts: a.artifacts, validator: a.validator,
+		extractor: a.extractor, inspectVideo: a.inspectVideo, transcribeVideo: a.transcribeVideo,
 	})
 	client, err := river.NewClient(riverpgxv5.New(db), &river.Config{
 		Queues: map[string]river.QueueConfig{queueName: {MaxWorkers: 1}}, Workers: workers,

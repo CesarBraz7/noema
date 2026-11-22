@@ -88,7 +88,7 @@ func Inspect(ctx context.Context, raw string) (Capture, error) {
 		"--use-extractors", "youtube", "--no-playlist", "--skip-download", "--ignore-no-formats-error",
 		"--socket-timeout", "15", "--retries", "1",
 		"--print", "%(.{id,title,channel,uploader,upload_date,duration,language,subtitles,automatic_captions})j", "--", canonical)
-	cmd.Env = []string{"PATH=" + os.Getenv("PATH"), "LANG=C.UTF-8", "PYTHONUTF8=1", "DENO_DIR=" + cache}
+	cmd.Env = extractorEnv(cache)
 	output, err := cmd.Output()
 	switch {
 	case extractCtx.Err() != nil:
@@ -127,6 +127,13 @@ func Inspect(ctx context.Context, raw string) (Capture, error) {
 	capture.CaptionsStatus = CaptionsAvailable
 	capture.Captions = &track
 	return capture, nil
+}
+
+func extractorEnv(cache string) []string {
+	return []string{
+		"PATH=" + os.Getenv("PATH"), "LANG=C.UTF-8", "PYTHONUTF8=1",
+		"DENO_DIR=" + cache, "TMPDIR=" + cache, "TEMP=" + cache,
+	}
 }
 
 func CanonicalURL(raw string) (string, error) {

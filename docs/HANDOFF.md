@@ -14,9 +14,11 @@ O fluxo de ingestão de artigos foi validado no Windows em 22 de novembro de 202
 
 Use o Docker Desktop para executar o worker e um PostgreSQL descartável para os testes de integração com a API GitHub simulada. [Testes locais](../README.md#verificar-localmente)
 
-A Fase 2 já aceita vídeos do YouTube na inbox. O mesmo extrator usado por `inspect-video` alimenta o River, guarda as legendas com timestamps e publica uma nota em `Fontes/Vídeos/`. Links equivalentes reaproveitam a captura. Vídeos sem legenda compatível ficam em `NEEDS_REVIEW` com os metadados salvos. O próximo incremento é extrair áudio com FFmpeg, transcrever com timestamps e retomar esses pedidos. [Comando](../README.md#inspecionar-um-vídeo-do-youtube) · [Roadmap](ROADMAP.md#fase-2--vídeos)
+A Fase 2 aceita vídeos do YouTube na inbox. O worker preserva o texto de legendas ou da transcrição local com timestamps e publica uma nota em `Fontes/Vídeos/`. Quando faltam legendas, a imagem Docker usa FFmpeg e Whisper com vídeos de até 20 minutos. O comando `retry-video` retoma pedidos antigos que ficaram em revisão pela ausência de legenda. O próximo incremento da Fase 2 é a análise visual com evidências temporais. [Instruções](../README.md#executar-a-fase-1) · [Roadmap](ROADMAP.md#fase-2--vídeos)
 
 O teste local no Docker usou um vídeo público do TED, PostgreSQL descartável e a API GitHub simulada. O pedido ficou em `COMPLETED`, com 427 trechos de legenda, três artefatos e a nota de vídeo.
+
+O teste de transcrição e retomada usou áudio real do YouTube, PostgreSQL descartável e API GitHub simulada. Rodou no Windows com FFmpeg e Whisper portátil 1.8.6. O pedido retomado ficou em `COMPLETED`, com quatro artefatos e uma nota. A imagem AMD64 com Whisper 1.9.5 foi construída. A validação de execução dessa versão no Docker ficou pendente porque o serviço WSL parou de responder no Windows.
 
 Use `main` para os commits e pushes deste repositório. Para verificar o código no PowerShell, rode os comandos abaixo na raiz do clone.
 

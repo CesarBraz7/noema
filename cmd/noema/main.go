@@ -15,7 +15,7 @@ import (
 
 const version = "0.1.0"
 
-const usage = "uso: noema {version|migrate|once|run|inspect-video URL}"
+const usage = "uso: noema {version|migrate|once|run|inspect-video URL|retry-video URL}"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -39,6 +39,13 @@ func run(ctx context.Context, args []string) error {
 		encoder := json.NewEncoder(os.Stdout)
 		encoder.SetIndent("", "  ")
 		return encoder.Encode(capture)
+	case len(args) == 2 && args[0] == "retry-video":
+		count, err := pipeline.RetryVideo(ctx, databaseURL(), args[1])
+		if err != nil {
+			return err
+		}
+		fmt.Printf("Pedidos de vídeo reenfileirados %d\n", count)
+		return nil
 	case len(args) != 1:
 		return errors.New(usage)
 	}
@@ -50,6 +57,8 @@ func run(ctx context.Context, args []string) error {
 		return pipeline.Migrate(ctx, databaseURL())
 	case "inspect-video":
 		return errors.New("uso: noema inspect-video URL")
+	case "retry-video":
+		return errors.New("uso: noema retry-video URL")
 	case "once", "run":
 		app, err := pipeline.FromEnv(ctx, databaseURL())
 		if err != nil {

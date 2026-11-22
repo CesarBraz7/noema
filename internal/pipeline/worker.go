@@ -29,17 +29,21 @@ var (
 	errArtifactTooLarge = errors.New("artefato excede o limite de tamanho")
 )
 
+const missingCaptionsReview = "vídeo sem legenda disponível; metadados salvos em "
+
 type ingestionJob struct {
-	RequestID int64 `json:"requestId"`
+	RequestID  int64 `json:"requestId"`
+	Transcribe bool  `json:"transcribe,omitempty"`
 }
 
 func (ingestionJob) Kind() string { return "noema_article" }
 
 type request struct {
-	id       int64
-	sourceID string
-	url      string
-	focus    string
+	id         int64
+	sourceID   string
+	url        string
+	focus      string
+	transcribe bool
 }
 
 func (r request) isVideo() bool {
@@ -52,12 +56,13 @@ type articleExtractor interface {
 
 type ingestionWorker struct {
 	river.WorkerDefaults[ingestionJob]
-	db           *pgxpool.Pool
-	vault        *github.Repository
-	artifacts    *github.Repository
-	extractor    articleExtractor
-	inspectVideo func(context.Context, string) (video.Capture, error)
-	validator    schemas.Validator
+	db              *pgxpool.Pool
+	vault           *github.Repository
+	artifacts       *github.Repository
+	extractor       articleExtractor
+	inspectVideo    func(context.Context, string) (video.Capture, error)
+	transcribeVideo func(context.Context, video.Capture) (video.Transcript, error)
+	validator       schemas.Validator
 }
 
 func (*ingestionWorker) NextRetry(job *river.Job[ingestionJob]) time.Time {
@@ -65,8 +70,15 @@ func (*ingestionWorker) NextRetry(job *river.Job[ingestionJob]) time.Time {
 	return time.Now().Add(delay + rand.N(delay/5))
 }
 
+func (*ingestionWorker) Timeout(job *river.Job[ingestionJob]) time.Duration {
+	if job.Args.Transcribe {
+		return 20 * time.Minute
+	}
+	return 0
+}
+
 func (w *ingestionWorker) Work(ctx context.Context, job *river.Job[ingestionJob]) error {
-	req := request{id: job.Args.RequestID}
+	req := request{id: job.Args.RequestID, transcribe: job.Args.Transcribe}
 	var state string
 	err := w.db.QueryRow(ctx, `
 		SELECT r.source_id, s.canonical_url, r.focus, r.state
@@ -90,7 +102,7 @@ func (w *ingestionWorker) Work(ctx context.Context, job *river.Job[ingestionJob]
 		switch {
 		case errors.Is(err, errReview):
 			state, permanent = "NEEDS_REVIEW", true
-		case errors.Is(err, article.ErrAccess), errors.Is(err, github.ErrPermission):
+		case errors.Is(err, article.ErrAccess), errors.Is(err, github.ErrPermission), errors.Is(err, video.ErrAudioAccess):
 			state, permanent = "ACCESS_REQUIRED", true
 		case errors.Is(err, article.ErrUnsupported), errors.Is(err, article.ErrUnsafe), errors.Is(err, errArtifactTooLarge):
 			state, permanent = "FAILED", true
@@ -123,12 +135,25 @@ func (w *ingestionWorker) process(ctx context.Context, req request) error {
 	if err := w.state(ctx, req.id, "CAPTURING", ""); err != nil {
 		return err
 	}
-	source, captureRef, err := w.capture(ctx, req, capturePath, sourceType)
+	source, captureRef, err := w.capture(ctx, req, capturePath, sourceType, []string{}, func(ctx context.Context) (sourceContent, error) {
+		return w.extract(ctx, req)
+	})
 	if err != nil {
 		return err
 	}
-	if len(source.Blocks) == 0 {
-		return fmt.Errorf("%w: vídeo sem legenda disponível; metadados salvos em %s", errReview, capturePath)
+	if req.isVideo() && len(source.Blocks) == 0 {
+		extractorVersion = "whisper.cpp-" + video.WhisperVersion + "-" + video.WhisperModel
+		transcriptPath := path.Join(root, fingerprint("youtube-audio-v1", extractorVersion, captureRef.SHA256), "source-content.json")
+		metadataOnly := source
+		source, captureRef, err = w.capture(ctx, req, transcriptPath, sourceType, []string{captureRef.SHA256}, func(ctx context.Context) (sourceContent, error) {
+			if !req.transcribe || w.transcribeVideo == nil {
+				return sourceContent{}, fmt.Errorf("%w: %s%s", errReview, missingCaptionsReview, capturePath)
+			}
+			return w.transcribe(ctx, metadataOnly, capturePath)
+		})
+		if err != nil {
+			return err
+		}
 	}
 	if err := w.state(ctx, req.id, "CONSOLIDATING", ""); err != nil {
 		return err
@@ -156,7 +181,7 @@ func (w *ingestionWorker) process(ctx context.Context, req request) error {
 	return w.state(ctx, req.id, "COMPLETED", "")
 }
 
-func (w *ingestionWorker) capture(ctx context.Context, req request, location, sourceType string) (sourceContent, artifact, error) {
+func (w *ingestionWorker) capture(ctx context.Context, req request, location, sourceType string, dependencies []string, extract func(context.Context) (sourceContent, error)) (sourceContent, artifact, error) {
 	var source sourceContent
 	file, err := w.artifacts.Get(ctx, location, "")
 	if err != nil {
@@ -167,7 +192,7 @@ func (w *ingestionWorker) capture(ctx context.Context, req request, location, so
 			source.SourceID != req.sourceID || source.Source.URL != req.url || source.Source.Type != sourceType {
 			return source, artifact{}, fmt.Errorf("%w: checkpoint de captura inválido", errReview)
 		}
-		ref, err := w.recordArtifact(ctx, req.sourceID, schemas.Source, location, file.Data, []string{})
+		ref, err := w.recordArtifact(ctx, req.sourceID, schemas.Source, location, file.Data, dependencies)
 		return source, ref, err
 	}
 	var known bool
@@ -177,11 +202,11 @@ func (w *ingestionWorker) capture(ctx context.Context, req request, location, so
 	if known {
 		return source, artifact{}, fmt.Errorf("%w: checkpoint de captura ausente", errReview)
 	}
-	source, err = w.extract(ctx, req)
+	source, err = extract(ctx)
 	if err != nil {
 		return source, artifact{}, err
 	}
-	ref, err := w.putArtifact(ctx, req.sourceID, schemas.Source, location, source, []string{})
+	ref, err := w.putArtifact(ctx, req.sourceID, schemas.Source, location, source, dependencies)
 	return source, ref, err
 }
 
@@ -194,6 +219,7 @@ func (w *ingestionWorker) extract(ctx context.Context, req request) (sourceConte
 		if videoCapture.CaptionsStatus == video.CaptionsFetchFailed {
 			return sourceContent{}, errors.New("falha ao buscar a legenda do YouTube")
 		}
+		videoCapture.URL = req.url
 		return newVideoSource(req.sourceID, videoCapture, time.Now()), nil
 	}
 	doc, err := w.extractor.Extract(ctx, req.url)
@@ -201,6 +227,17 @@ func (w *ingestionWorker) extract(ctx context.Context, req request) (sourceConte
 		return sourceContent{}, err
 	}
 	return newSource(req.sourceID, req.url, doc, time.Now()), nil
+}
+
+func (w *ingestionWorker) transcribe(ctx context.Context, source sourceContent, metadataPath string) (sourceContent, error) {
+	transcript, err := w.transcribeVideo(ctx, video.Capture{URL: source.Source.URL, Duration: source.Source.DurationSeconds})
+	if errors.Is(err, video.ErrAudioUnavailable) || errors.Is(err, video.ErrNoSpeech) {
+		return sourceContent{}, fmt.Errorf("%w: %v; metadados salvos em %s", errReview, err, metadataPath)
+	}
+	if err != nil {
+		return sourceContent{}, err
+	}
+	return transcribedSource(source, transcript, time.Now()), nil
 }
 
 func (w *ingestionWorker) putArtifact(ctx context.Context, sourceID, kind, location string, value any, dependencies []string) (artifact, error) {

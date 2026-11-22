@@ -206,6 +206,49 @@ func TestArticleFlow(t *testing.T) {
 		if got := server.get(videoNote); !strings.Contains(got, "Foco: checkpoint") {
 			t.Fatalf("nota do vídeo sem o novo foco: %q", got)
 		}
+
+		var transcriptions atomic.Int32
+		app.transcribeVideo = func(_ context.Context, doc video.Capture) (video.Transcript, error) {
+			transcriptions.Add(1)
+			if doc.URL != noCaptions || doc.Duration != 132 {
+				t.Errorf("metadados reutilizados na transcrição: %+v", doc)
+			}
+			return video.Transcript{Language: "pt", Segments: []video.Segment{
+				{StartMS: 330, DurationMS: 1400, Text: "Trecho transcrito."},
+			}}, nil
+		}
+		for _, retry := range []struct {
+			url   string
+			count int
+		}{
+			{canonical, 0},
+			{"https://youtu.be/12345678901?si=retry", 1},
+			{noCaptions, 0},
+		} {
+			count, err := RetryVideo(ctx, dsn, retry.url)
+			if err != nil || count != retry.count {
+				t.Fatalf("RetryVideo(%q) = %d, %v, esperava %d", retry.url, count, err, retry.count)
+			}
+		}
+		if err := app.Cycle(ctx, false, true); err != nil {
+			t.Fatal(err)
+		}
+		assertStates(t, db, "COMPLETED,COMPLETED,NEEDS_REVIEW,COMPLETED,COMPLETED,COMPLETED")
+		retryNote := "/repos/owner/vault/contents/Fontes/Vídeos/" + partialID + ".md"
+		if got := server.get(retryNote); !strings.Contains(got, "Trechos da transcrição") ||
+			!strings.Contains(got, "00:00:00.330–00:00:01.730") {
+			t.Fatalf("nota sem transcrição temporal: %q", got)
+		}
+		if capture := server.get(repoLocation + location(partialID, noCaptions)); capture != partial {
+			t.Fatal("a retomada alterou o checkpoint original")
+		}
+		server.set(inbox, "- "+noCaptions+"\n  - Foco: trecho\n")
+		if err := app.Cycle(ctx, true, true); err != nil {
+			t.Fatal(err)
+		}
+		if videoCaptures.Load() != 2 || transcriptions.Load() != 1 {
+			t.Fatalf("a retomada ou o novo foco repetiu extração: capturas %d, transcrições %d", videoCaptures.Load(), transcriptions.Load())
+		}
 	})
 }
 

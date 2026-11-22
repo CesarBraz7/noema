@@ -45,11 +45,13 @@ type metadata struct {
 }
 
 type capture struct {
-	Status            string   `json:"status"`
-	Method            string   `json:"method"`
-	Missing           []string `json:"missing"`
-	CaptionLanguage   string   `json:"captionLanguage,omitempty"`
-	AutomaticCaptions *bool    `json:"automaticCaptions,omitempty"`
+	Status             string   `json:"status"`
+	Method             string   `json:"method"`
+	Missing            []string `json:"missing"`
+	CaptionLanguage    string   `json:"captionLanguage,omitempty"`
+	AutomaticCaptions  *bool    `json:"automaticCaptions,omitempty"`
+	TranscriptLanguage string   `json:"transcriptLanguage,omitempty"`
+	TranscriptModel    string   `json:"transcriptModel,omitempty"`
 }
 
 type block struct {
@@ -102,14 +104,30 @@ func newVideoSource(id string, doc video.Capture, now time.Time) sourceContent {
 	}
 	source.Capture.CaptionLanguage = doc.Captions.Language
 	source.Capture.AutomaticCaptions = &doc.Captions.Automatic
-	for i, segment := range doc.Captions.Segments {
+	source.Blocks = timedBlocks(doc.Captions.Segments)
+	return source
+}
+
+func transcribedSource(source sourceContent, transcript video.Transcript, now time.Time) sourceContent {
+	source.Source.CapturedAt = now.UTC().Truncate(time.Second)
+	source.Capture = capture{
+		Status: "partial", Method: "whisper.cpp", TranscriptLanguage: transcript.Language, TranscriptModel: video.WhisperModel,
+		Missing: []string{"Imagem não foi analisada.", "Legenda original indisponível."},
+	}
+	source.Blocks = timedBlocks(transcript.Segments)
+	return source
+}
+
+func timedBlocks(segments []video.Segment) []block {
+	blocks := make([]block, 0, len(segments))
+	for i, segment := range segments {
 		start, end := segment.StartMS, segment.StartMS+segment.DurationMS
-		source.Blocks = append(source.Blocks, block{
+		blocks = append(blocks, block{
 			ID: fmt.Sprintf("b-%03d", i+1), Kind: "transcript_segment", Text: segment.Text,
 			StartMS: &start, EndMS: &end,
 		})
 	}
-	return source
+	return blocks
 }
 
 type knowledge struct {
@@ -145,8 +163,11 @@ type evidence struct {
 
 func consolidate(source sourceContent, focus string) knowledge {
 	limitation := "A seleção de trechos não constitui uma interpretação ou verificação independente do artigo."
-	if source.Source.Type == "video" {
+	switch source.Capture.Method {
+	case "yt-dlp":
 		limitation = "Os trechos foram selecionados da legenda do vídeo e podem conter erros de transcrição."
+	case "whisper.cpp":
+		limitation = "Os trechos vieram de transcrição automática do áudio e podem conter erros de reconhecimento."
 	}
 	result := knowledge{
 		SchemaVersion: schemaVersion, SourceID: source.SourceID, Title: source.Source.Title,
@@ -257,6 +278,9 @@ func note(source sourceContent, knowledge knowledge, manifestPath string) []byte
 		}
 		fmt.Fprintf(&body, "- Legendas %s (%s)\n", kind, markdown(source.Capture.CaptionLanguage))
 	}
+	if source.Capture.TranscriptLanguage != "" {
+		fmt.Fprintf(&body, "- Transcrição local com Whisper %s (%s)\n", markdown(source.Capture.TranscriptModel), markdown(source.Capture.TranscriptLanguage))
+	}
 	fmt.Fprintf(&body, "- Captura %s\n", source.Source.CapturedAt.Format(time.RFC3339))
 	fmt.Fprintf(&body, "- Manifesto de evidências no repositório de artefatos `%s`\n", manifestPath)
 	if knowledge.FocusNote != "" {
@@ -265,6 +289,9 @@ func note(source sourceContent, knowledge knowledge, manifestPath string) []byte
 	heading := "Trechos do artigo"
 	if source.Source.Type == "video" {
 		heading = "Trechos da legenda"
+	}
+	if source.Capture.Method == "whisper.cpp" {
+		heading = "Trechos da transcrição"
 	}
 	fmt.Fprintf(&body, "\n## %s\n", heading)
 	for _, insight := range knowledge.Insights {

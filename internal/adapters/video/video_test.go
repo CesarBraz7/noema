@@ -1,9 +1,29 @@
 package video
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
+
+func TestParseWhisperTranscript(t *testing.T) {
+	const recording = `{"result":{"language":"pt"},"transcription":[
+		{"offsets":{"from":0,"to":1200},"text":" Olá, mundo."},
+		{"offsets":{"from":1200,"to":2000},"text":" [BLANK_AUDIO]"},
+		{"offsets":{"from":2400,"to":3200},"text":" Outro trecho."}
+	]}`
+	result, err := parseTranscript(strings.NewReader(recording))
+	if err != nil || result.Language != "pt" || len(result.Segments) != 2 {
+		t.Fatalf("transcrição inesperada: %+v, %v", result, err)
+	}
+	if result.Segments[0] != (Segment{StartMS: 0, DurationMS: 1200, Text: "Olá, mundo."}) ||
+		result.Segments[1] != (Segment{StartMS: 2400, DurationMS: 800, Text: "Outro trecho."}) {
+		t.Fatalf("trechos fora de posição: %+v", result.Segments)
+	}
+	if _, err := parseTranscript(strings.NewReader(`{"result":{"language":"pt"},"transcription":[]}`)); !errors.Is(err, ErrNoSpeech) {
+		t.Fatalf("esperava ausência de fala, obtive %v", err)
+	}
+}
 
 func TestVideoID(t *testing.T) {
 	const id = "abcdefghijk"

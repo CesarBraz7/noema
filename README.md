@@ -2,7 +2,7 @@
 
 **Pipeline pessoal de ingestão e consolidação de conhecimento.**
 
-O Noema transforma links em conhecimento rastreável no Obsidian. A ingestão cobre artigos web e vídeos públicos do YouTube com legendas disponíveis.
+O Noema transforma links em conhecimento rastreável no Obsidian. A ingestão cobre artigos web e vídeos públicos do YouTube com legendas ou áudio que possa ser transcrito localmente.
 
 > **Fase 1.** A ingestão de artigos usa GitHub, PostgreSQL, River OSS e Trafilatura. A síntese seleciona trechos localmente, com referência ao bloco capturado e sem chamadas de IA.
 
@@ -56,7 +56,16 @@ A inbox é verificada a cada 15 minutos, com ETag. O serviço verifica a fila na
 
 A captura `source-content.json` é reutilizada quando o mesmo artigo é reenviado. Um novo foco gera `knowledge.json` e `manifest.json` próprios. O manifesto referencia o caminho e o SHA-256 da captura. A nota em `Fontes/Artigos/` aponta para o manifesto e para os blocos que sustentam cada trecho. Se a nota já tiver sido editada ou removida, o worker preserva a mudança e registra `NEEDS_REVIEW`.
 
-Para vídeos, o worker guarda os metadados, o idioma e a origem das legendas, além do início e fim de cada trecho em milissegundos em `source-content.json`. A nota em `Fontes/Vídeos/` referencia os trechos por intervalo de tempo. Links curtos, links com parâmetros e links completos do mesmo vídeo reaproveitam a captura e o mesmo pedido quando o foco é igual. Quando nenhuma legenda compatível está disponível, o worker salva apenas os metadados e marca o pedido como `NEEDS_REVIEW`. Falhas de leitura da legenda entram nas tentativas do River.
+Para vídeos, o worker guarda os metadados e a origem do texto em `source-content.json`, com início e fim de cada trecho em milissegundos. A nota em `Fontes/Vídeos/` referencia esses intervalos. Links equivalentes reaproveitam a captura e o mesmo pedido quando o foco é igual.
+
+Quando o YouTube não oferece uma legenda compatível, a imagem Docker extrai o áudio com FFmpeg e transcreve com Whisper `tiny-q5_1` no próprio contêiner. O fallback abrange vídeos de até 20 minutos, com download de áudio de até 64 MiB. O Noema conserva os metadados e a transcrição em checkpoints separados e apaga o áudio temporário ao fim de cada tentativa. Se o áudio não puder ser transcrito, o pedido fica em revisão ou registra a restrição de acesso. Falhas temporárias entram nas tentativas do River.
+
+Para retomar um pedido antigo que ficou em revisão por falta de legenda antes da transcrição local, reenfileire o vídeo e rode um ciclo manual.
+
+```powershell
+docker compose --env-file .env.local -f deploy/compose.yaml run --build --rm noema retry-video 'https://www.youtube.com/watch?v=VIDEO_ID'
+docker compose --env-file .env.local -f deploy/compose.yaml run --rm noema once
+```
 
 ## Inspecionar um vídeo do YouTube
 

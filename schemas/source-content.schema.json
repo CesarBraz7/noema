@@ -25,10 +25,12 @@
       "required": ["status", "method", "missing"],
       "properties": {
         "status": { "enum": ["complete", "partial"] },
-        "method": { "enum": ["trafilatura", "yt-dlp"] },
+        "method": { "enum": ["trafilatura", "yt-dlp", "whisper.cpp"] },
         "missing": { "type": "array", "items": { "type": "string" } },
         "captionLanguage": { "type": "string", "minLength": 1 },
-        "automaticCaptions": { "type": "boolean" }
+        "automaticCaptions": { "type": "boolean" },
+        "transcriptLanguage": { "type": "string", "minLength": 1 },
+        "transcriptModel": { "type": "string", "minLength": 1 }
       }
     },
     "blocks": {
@@ -51,7 +53,7 @@
   "then": {
     "properties": {
       "source": { "properties": { "platform": { "const": "youtube" } } },
-      "capture": { "properties": { "method": { "const": "yt-dlp" } } },
+      "capture": { "properties": { "method": { "enum": ["yt-dlp", "whisper.cpp"] } } },
       "blocks": {
         "items": {
           "required": ["startMs", "endMs"],
@@ -59,9 +61,18 @@
         }
       }
     },
-    "if": { "properties": { "blocks": { "minItems": 1 } } },
-    "then": { "properties": { "capture": { "required": ["captionLanguage", "automaticCaptions"] } } },
-    "else": { "properties": { "capture": { "properties": { "status": { "const": "partial" } } } } }
+    "if": { "properties": { "capture": { "properties": { "method": { "const": "whisper.cpp" } } } } },
+    "then": {
+      "properties": {
+        "capture": { "required": ["transcriptLanguage", "transcriptModel"] },
+        "blocks": { "minItems": 1 }
+      }
+    },
+    "else": {
+      "if": { "properties": { "blocks": { "minItems": 1 } } },
+      "then": { "properties": { "capture": { "required": ["captionLanguage", "automaticCaptions"] } } },
+      "else": { "properties": { "capture": { "properties": { "status": { "const": "partial" } } } } }
+    }
   },
   "else": {
     "properties": {
