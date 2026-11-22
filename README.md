@@ -58,7 +58,7 @@ A captura `source-content.json` é reutilizada quando o mesmo artigo é reenviad
 
 Para vídeos, o worker guarda os metadados e a origem do texto em `source-content.json`, com início e fim de cada trecho em milissegundos. A nota em `Fontes/Vídeos/` referencia esses intervalos. Links equivalentes reaproveitam a captura e o mesmo pedido quando o foco é igual.
 
-Quando o YouTube não oferece uma legenda compatível, a imagem Docker extrai o áudio com FFmpeg e transcreve com Whisper `tiny-q5_1` no próprio contêiner. O fallback abrange vídeos de até 20 minutos, com download de áudio de até 64 MiB. O Noema conserva os metadados e a transcrição em checkpoints separados e apaga o áudio temporário ao fim de cada tentativa. Se o áudio não puder ser transcrito, o pedido fica em revisão ou registra a restrição de acesso. Falhas temporárias entram nas tentativas do River.
+Quando o YouTube não oferece uma legenda compatível, a imagem Docker extrai o áudio com FFmpeg e transcreve com Whisper `tiny-q5_1` no próprio contêiner. A implementação atual limita esse fallback a 20 minutos e 64 MiB de áudio para conter o uso de recursos. O limite de duração é provisório. A especificação prevê transcrição em partes para vídeos longos. O Noema conserva os metadados e a transcrição em checkpoints separados e apaga o áudio temporário ao fim de cada tentativa. Se o áudio não puder ser transcrito, o pedido fica em revisão ou registra a restrição de acesso. Falhas temporárias entram nas tentativas do River. [Especificação](docs/especificacao-arquitetura-v1.2.md#82-vídeos-três-responsabilidades-distintas)
 
 Para retomar um pedido antigo que ficou em revisão por falta de legenda antes da transcrição local, reenfileire o vídeo e rode um ciclo manual.
 

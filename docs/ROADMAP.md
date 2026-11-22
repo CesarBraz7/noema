@@ -23,6 +23,7 @@ O desenvolvimento e a validação funcionam no Windows com Docker Desktop. A esc
 - Capturar metadados e legendas com timestamps via yt-dlp. O comando manual já roda no Docker local. [Instruções](../README.md#inspecionar-um-vídeo-do-youtube)
 - A fila já recebe vídeos do YouTube, grava as legendas como evidência e publica notas com timestamps. O worker salva metadados para revisão quando faltam legendas.
 - Usar FFmpeg e Whisper local quando faltam legendas. Retomar pedidos antigos de vídeo pelo comando `retry-video`. [Instruções](../README.md#executar-a-fase-1)
+- Transcrever vídeos longos em partes, preservando os timestamps do vídeo completo.
 - Preservar os capítulos fornecidos pelo YouTube e publicar links para seus timestamps nas notas.
 - Criar análise multimodal com Gemini quando disponível e inspeção adicional de frames quando necessária.
 - Persistir resultados e custos por etapa e reutilizar artefatos compatíveis.
