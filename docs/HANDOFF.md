@@ -4,7 +4,7 @@ O primeiro fluxo do Noema está implementado. A próxima sessão deve aplicar a 
 
 ## Estado do projeto
 
-- Repositório principal privado `CesarBraz7/noema`, branch `noema-phase1-neon`. Os commits `17ef36d` e `10217c6` contêm a ingestão e a integração com o Neon.
+- Repositório principal privado `CesarBraz7/noema`. Faça os commits e pushes na branch `main`. Os commits `17ef36d` e `10217c6` contêm a ingestão e a integração com o Neon.
 - O worker lê `Inbox/links.md`, deduplica URLs, extrai o texto com Trafilatura e seleciona citações localmente. O River usa PostgreSQL. Os artefatos JSON vão para `CesarBraz7/noema-artifacts`, e as notas Markdown vão para `CesarBraz7/obsidian-vault`. A publicação preserva edições manuais. [README](../README.md)
 - O projeto Neon `winter-band-81069553`, branch `production`, já existe. O `neon deploy` confirmou o Postgres e baixou as variáveis para o `.env.local` do Codex Cloud. Na última consulta ao Neon por HTTPS, as tabelas `river_job` e `noema_ingestion_requests` ainda não existiam. A porta `5432` foi recusada no Cloud.
 - O fluxo passou com PostgreSQL 16, River e Trafilatura reais e uma API GitHub simulada. Também passaram a migração local com TLS e `channel_binding=require` e o build Docker AMD64. O primeiro ciclo com o Neon e os repositórios privados será a validação de produção.
@@ -14,11 +14,11 @@ O primeiro fluxo do Noema está implementado. A próxima sessão deve aplicar a 
 Se for clonar o repositório no Windows, execute no PowerShell dentro da pasta onde quer guardar o projeto e abra a pasta `noema` em uma sessão **Local** do Codex Desktop.
 
 ```powershell
-git clone --branch noema-phase1-neon https://github.com/CesarBraz7/noema.git
+git clone --branch main https://github.com/CesarBraz7/noema.git
 cd noema
 ```
 
-Se já tiver uma cópia, confirme que está com a árvore limpa, execute `git fetch origin` e use `git switch --track origin/noema-phase1-neon`. Se a branch local já existir, use `git switch noema-phase1-neon`.
+Se já tiver uma cópia, confirme que está com a árvore limpa, execute `git switch main` e atualize com `git pull --ff-only origin main`.
 
 No painel do Neon, abra **Connect** na branch `production` com **Connection pooling** desativado. Crie `.env.local` na raiz do clone e salve a URL direta inteira na variável `DATABASE_URL_UNPOOLED`, incluindo os parâmetros TLS e channel binding fornecidos pelo Neon. O arquivo e as credenciais do Codex Cloud ficam no ambiente anterior. Mantenha a URL real no arquivo local ignorado pelo Git. [Conexão no Neon](https://neon.com/docs/connect/connect-from-any-app)
 
