@@ -56,6 +56,16 @@ A inbox é verificada a cada 15 minutos, com ETag. O serviço verifica a fila na
 
 A captura `source-content.json` é reutilizada quando o mesmo artigo é reenviado. Um novo foco gera `knowledge.json` e `manifest.json` próprios. O manifesto referencia o caminho e o SHA-256 da captura. A nota em `Fontes/Artigos/` aponta para o manifesto e para os blocos que sustentam cada trecho. Se a nota já tiver sido editada ou removida, o worker preserva a mudança e registra `NEEDS_REVIEW`.
 
+## Inspecionar um vídeo do YouTube
+
+Troque `VIDEO_ID` pelo identificador de um vídeo público e execute no PowerShell.
+
+```powershell
+docker compose -f deploy/compose.yaml run --build --rm noema inspect-video 'https://www.youtube.com/watch?v=VIDEO_ID'
+```
+
+O comando imprime metadados e uma faixa de legendas em JSON, com início e duração de cada trecho em milissegundos. Ele prioriza legendas manuais e pode usar a faixa automática original quando disponível. `captionsStatus` informa se a legenda foi obtida (`available`), se nenhuma faixa compatível foi encontrada (`unavailable`) ou se a leitura falhou (`fetch_failed`). A inspeção roda sob demanda e requer apenas acesso ao YouTube.
+
 ## Verificar localmente
 
 Use Go 1.25+ para compilar, rodar os testes e consultar a versão. `npm run build` executa o mesmo build Go para a validação do setup do Neon.

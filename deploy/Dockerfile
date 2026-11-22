@@ -12,7 +12,10 @@ ARG TARGETOS=linux
 ARG TARGETARCH=amd64
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -o /out/noema ./cmd/noema
 
+FROM denoland/deno:bin-2.9.8 AS deno
+
 FROM debian:bookworm-slim
+COPY --from=deno /deno /usr/local/bin/deno
 COPY deploy/extractors.requirements.txt /tmp/extractors.requirements.txt
 RUN --mount=type=secret,id=build_ca_bundle \
     if [ -s /run/secrets/build_ca_bundle ]; then export PIP_CERT=/run/secrets/build_ca_bundle; fi \

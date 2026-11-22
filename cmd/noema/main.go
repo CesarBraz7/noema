@@ -2,16 +2,20 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/CesarBraz7/noema/internal/adapters/video"
 	"github.com/CesarBraz7/noema/internal/pipeline"
 )
 
 const version = "0.1.0"
+
+const usage = "uso: noema {version|migrate|once|run|inspect-video URL}"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -25,10 +29,18 @@ func main() {
 func run(ctx context.Context, args []string) error {
 	switch {
 	case len(args) == 0 || len(args) == 1 && (args[0] == "--help" || args[0] == "help"):
-		fmt.Println("Uso: noema {version|migrate|once|run}")
+		fmt.Println(usage)
 		return nil
+	case len(args) == 2 && args[0] == "inspect-video":
+		capture, err := video.Inspect(ctx, args[1])
+		if err != nil {
+			return err
+		}
+		encoder := json.NewEncoder(os.Stdout)
+		encoder.SetIndent("", "  ")
+		return encoder.Encode(capture)
 	case len(args) != 1:
-		return errors.New("uso: noema {version|migrate|once|run}")
+		return errors.New(usage)
 	}
 	switch args[0] {
 	case "version":
@@ -36,6 +48,8 @@ func run(ctx context.Context, args []string) error {
 		return nil
 	case "migrate":
 		return pipeline.Migrate(ctx, databaseURL())
+	case "inspect-video":
+		return errors.New("uso: noema inspect-video URL")
 	case "once", "run":
 		app, err := pipeline.FromEnv(ctx, databaseURL())
 		if err != nil {
