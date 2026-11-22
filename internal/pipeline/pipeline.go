@@ -1,4 +1,4 @@
-// Package pipeline orchestrates the article inbox and its River workers.
+// Package pipeline orchestrates the inbox and its River worker.
 package pipeline
 
 import (
@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/CesarBraz7/noema/internal/adapters/article"
+	"github.com/CesarBraz7/noema/internal/adapters/video"
 	"github.com/CesarBraz7/noema/internal/inbox"
 	"github.com/CesarBraz7/noema/internal/storage/github"
 	"github.com/CesarBraz7/noema/schemas"
@@ -37,12 +38,13 @@ const (
 var repositoryName = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_.-]*$`)
 
 type App struct {
-	database  string
-	vault     *github.Repository
-	artifacts *github.Repository
-	extractor articleExtractor
-	validator schemas.Validator
-	etag      string
+	database     string
+	vault        *github.Repository
+	artifacts    *github.Repository
+	extractor    articleExtractor
+	inspectVideo func(context.Context, string) (video.Capture, error)
+	validator    schemas.Validator
+	etag         string
 }
 
 func FromEnv(ctx context.Context, database string) (*App, error) {
@@ -69,7 +71,7 @@ func FromEnv(ctx context.Context, database string) (*App, error) {
 		return nil, err
 	}
 	return &App{
-		database: database, validator: validator, extractor: extractor,
+		database: database, validator: validator, extractor: extractor, inspectVideo: video.Inspect,
 		vault:     github.New("https://api.github.com", owner, vault, vaultToken),
 		artifacts: github.New("https://api.github.com", owner, artifacts, artifactsToken),
 	}, nil
@@ -208,7 +210,11 @@ func enqueue(ctx context.Context, db *pgxpool.Pool, entries []inbox.Entry) error
 	}
 	return pgx.BeginFunc(ctx, db, func(tx pgx.Tx) error {
 		for _, entry := range entries {
-			id := "web-" + digest([]byte(entry.URL))
+			prefix := "web-"
+			if entry.Video {
+				prefix = videoSourcePrefix
+			}
+			id := prefix + digest([]byte(entry.URL))
 			if _, err := tx.Exec(ctx, `INSERT INTO noema_sources (id, canonical_url) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`, id, entry.URL); err != nil {
 				return err
 			}
@@ -222,7 +228,7 @@ func enqueue(ctx context.Context, db *pgxpool.Pool, entries []inbox.Entry) error
 			if err != nil {
 				return err
 			}
-			if _, err := client.InsertTx(ctx, tx, articleJob{RequestID: requestID}, &river.InsertOpts{Queue: queueName, MaxAttempts: 3}); err != nil {
+			if _, err := client.InsertTx(ctx, tx, ingestionJob{RequestID: requestID}, &river.InsertOpts{Queue: queueName, MaxAttempts: 3}); err != nil {
 				return err
 			}
 		}
@@ -256,7 +262,7 @@ func (a *App) drain(ctx context.Context, db *pgxpool.Pool) (err error) {
 		FROM river_job j
 		WHERE j.kind = $1 AND j.queue = $2 AND j.state IN ('discarded', 'cancelled')
 		AND r.id = (j.args->>'requestId')::bigint
-		AND r.state IN ('PENDING', 'CAPTURING', 'CONSOLIDATING', 'PUBLISHING', 'RETRY_SCHEDULED')`, (articleJob{}).Kind(), queueName)
+		AND r.state IN ('PENDING', 'CAPTURING', 'CONSOLIDATING', 'PUBLISHING', 'RETRY_SCHEDULED')`, (ingestionJob{}).Kind(), queueName)
 	return err
 }
 
@@ -269,8 +275,8 @@ func closeSession(conn *pgxpool.Conn) {
 
 func (a *App) work(ctx context.Context, db *pgxpool.Pool) (err error) {
 	workers := river.NewWorkers()
-	river.AddWorker(workers, &articleWorker{
-		db: db, vault: a.vault, artifacts: a.artifacts, extractor: a.extractor, validator: a.validator,
+	river.AddWorker(workers, &ingestionWorker{
+		db: db, vault: a.vault, artifacts: a.artifacts, extractor: a.extractor, inspectVideo: a.inspectVideo, validator: a.validator,
 	})
 	client, err := river.NewClient(riverpgxv5.New(db), &river.Config{
 		Queues: map[string]river.QueueConfig{queueName: {MaxWorkers: 1}}, Workers: workers,
@@ -308,7 +314,7 @@ func eligibleJobs(ctx context.Context, db *pgxpool.Pool) (bool, error) {
 	var eligible bool
 	err := db.QueryRow(ctx, `
 		SELECT EXISTS (SELECT 1 FROM river_job WHERE kind = $1 AND queue = $2
-		AND (state IN ('available', 'running') OR (state IN ('retryable', 'scheduled') AND scheduled_at <= now())))`, (articleJob{}).Kind(), queueName).Scan(&eligible)
+		AND (state IN ('available', 'running') OR (state IN ('retryable', 'scheduled') AND scheduled_at <= now())))`, (ingestionJob{}).Kind(), queueName).Scan(&eligible)
 	if err != nil {
 		return false, fmt.Errorf("consultar fila River (execute noema migrate na instalação): %w", err)
 	}

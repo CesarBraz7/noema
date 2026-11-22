@@ -11,12 +11,13 @@
       "properties": {
         "url": { "type": "string", "format": "uri" },
         "resolvedUrl": { "type": "string", "format": "uri" },
-        "type": { "const": "article" },
-        "platform": { "const": "web" },
+        "type": { "enum": ["article", "video"] },
+        "platform": { "enum": ["web", "youtube"] },
         "title": { "type": "string", "minLength": 1 },
         "author": { "type": "string" },
         "publishedAt": { "type": "string", "format": "date" },
-        "capturedAt": { "type": "string", "format": "date-time" }
+        "capturedAt": { "type": "string", "format": "date-time" },
+        "durationSeconds": { "type": "number", "minimum": 0 }
       }
     },
     "capture": {
@@ -24,22 +25,52 @@
       "required": ["status", "method", "missing"],
       "properties": {
         "status": { "enum": ["complete", "partial"] },
-        "method": { "const": "trafilatura" },
-        "missing": { "type": "array", "items": { "type": "string" } }
+        "method": { "enum": ["trafilatura", "yt-dlp"] },
+        "missing": { "type": "array", "items": { "type": "string" } },
+        "captionLanguage": { "type": "string", "minLength": 1 },
+        "automaticCaptions": { "type": "boolean" }
       }
     },
     "blocks": {
-      "type": "array", "minItems": 1,
+      "type": "array",
       "items": {
         "type": "object",
         "required": ["id", "kind", "text"],
         "properties": {
           "id": { "type": "string", "pattern": "^b-[0-9]+$" },
-          "kind": { "const": "paragraph" },
-          "text": { "type": "string", "minLength": 1 }
+          "kind": { "enum": ["paragraph", "transcript_segment"] },
+          "text": { "type": "string", "minLength": 1 },
+          "startMs": { "type": "integer", "minimum": 0 },
+          "endMs": { "type": "integer", "minimum": 0 }
         }
       }
     },
     "media": { "type": "array", "maxItems": 0 }
+  },
+  "if": { "properties": { "source": { "properties": { "type": { "const": "video" } } } } },
+  "then": {
+    "properties": {
+      "source": { "properties": { "platform": { "const": "youtube" } } },
+      "capture": { "properties": { "method": { "const": "yt-dlp" } } },
+      "blocks": {
+        "items": {
+          "required": ["startMs", "endMs"],
+          "properties": { "kind": { "const": "transcript_segment" } }
+        }
+      }
+    },
+    "if": { "properties": { "blocks": { "minItems": 1 } } },
+    "then": { "properties": { "capture": { "required": ["captionLanguage", "automaticCaptions"] } } },
+    "else": { "properties": { "capture": { "properties": { "status": { "const": "partial" } } } } }
+  },
+  "else": {
+    "properties": {
+      "source": { "properties": { "platform": { "const": "web" } } },
+      "capture": { "properties": { "method": { "const": "trafilatura" } } },
+      "blocks": {
+        "minItems": 1,
+        "items": { "properties": { "kind": { "const": "paragraph" } } }
+      }
+    }
   }
 }

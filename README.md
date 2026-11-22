@@ -2,7 +2,7 @@
 
 **Pipeline pessoal de ingestão e consolidação de conhecimento.**
 
-O Noema transforma links em conhecimento rastreável no Obsidian. O primeiro fluxo cobre artigos web com texto extraível.
+O Noema transforma links em conhecimento rastreável no Obsidian. A ingestão cobre artigos web e vídeos públicos do YouTube com legendas disponíveis.
 
 > **Fase 1.** A ingestão de artigos usa GitHub, PostgreSQL, River OSS e Trafilatura. A síntese seleciona trechos localmente, com referência ao bloco capturado e sem chamadas de IA.
 
@@ -36,7 +36,7 @@ Os comandos abaixo funcionam no Windows com o Docker Desktop iniciado. O worker 
 
 1. Após vincular o projeto com `neon init`, rode `neon deploy` para trazer as variáveis do Postgres. O CLI cria `.env.local` ou atualiza `.env` se ele já existir. O Noema prefere `DATABASE_URL_UNPOOLED` e aceita `DATABASE_URL` como alternativa para uma conexão **direta** via TLS. A conexão direta é necessária para o River e o lock de sessão do worker.
 2. No mesmo arquivo de ambiente, configure um token GitHub da conta `CesarBraz7` com `Contents: Read and write` nos dois repositórios de dados. Use `GITHUB_TOKEN` para um único token, ou `GITHUB_VAULT_TOKEN` e `GITHUB_ARTIFACTS_TOKEN` para tokens separados. Os commits da automação são atribuídos pela API do GitHub à conta autenticada.
-3. Adicione um link de artigo ao `Inbox/links.md` no Obsidian e sincronize o vault com o GitHub. O check da caixa é opcional. Use uma linha indentada para acrescentar foco.
+3. Adicione um link de artigo ou vídeo individual do YouTube ao `Inbox/links.md` no GitHub ou no Obsidian. Se editar pelo Obsidian, envie a alteração ao GitHub. O check da caixa é opcional. Use uma linha indentada para acrescentar foco.
 4. Construa a imagem, prepare o banco e rode um primeiro ciclo. Se o CLI gravou em `.env`, use esse arquivo no argumento `--env-file`.
 
 ```bash
@@ -56,6 +56,8 @@ A inbox é verificada a cada 15 minutos, com ETag. O serviço verifica a fila na
 
 A captura `source-content.json` é reutilizada quando o mesmo artigo é reenviado. Um novo foco gera `knowledge.json` e `manifest.json` próprios. O manifesto referencia o caminho e o SHA-256 da captura. A nota em `Fontes/Artigos/` aponta para o manifesto e para os blocos que sustentam cada trecho. Se a nota já tiver sido editada ou removida, o worker preserva a mudança e registra `NEEDS_REVIEW`.
 
+Para vídeos, o worker guarda os metadados, o idioma e a origem das legendas, além do início e fim de cada trecho em milissegundos em `source-content.json`. A nota em `Fontes/Vídeos/` referencia os trechos por intervalo de tempo. Links curtos, links com parâmetros e links completos do mesmo vídeo reaproveitam a captura e o mesmo pedido quando o foco é igual. Quando nenhuma legenda compatível está disponível, o worker salva apenas os metadados e marca o pedido como `NEEDS_REVIEW`. Falhas de leitura da legenda entram nas tentativas do River.
+
 ## Inspecionar um vídeo do YouTube
 
 Troque `VIDEO_ID` pelo identificador de um vídeo público e execute no PowerShell.
@@ -64,7 +66,7 @@ Troque `VIDEO_ID` pelo identificador de um vídeo público e execute no PowerShe
 docker compose -f deploy/compose.yaml run --build --rm noema inspect-video 'https://www.youtube.com/watch?v=VIDEO_ID'
 ```
 
-O comando imprime metadados e uma faixa de legendas em JSON, com início e duração de cada trecho em milissegundos. Ele prioriza legendas manuais e pode usar a faixa automática original quando disponível. `captionsStatus` informa se a legenda foi obtida (`available`), se nenhuma faixa compatível foi encontrada (`unavailable`) ou se a leitura falhou (`fetch_failed`). A inspeção roda sob demanda e requer apenas acesso ao YouTube.
+O comando imprime metadados e uma faixa de legendas em JSON, com início e duração de cada trecho em milissegundos. Ele prioriza legendas manuais e pode usar a faixa automática original quando disponível. `captionsStatus` informa se a legenda foi obtida (`available`), se nenhuma faixa compatível foi encontrada (`unavailable`) ou se a leitura falhou (`fetch_failed`). A inspeção roda sob demanda e requer apenas acesso ao YouTube. Para gravar artefatos e publicar a nota, use a inbox e execute `once`.
 
 ## Verificar localmente
 

@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/CesarBraz7/noema/internal/adapters/article"
+	"github.com/CesarBraz7/noema/internal/adapters/video"
 	"github.com/CesarBraz7/noema/internal/storage/github"
 	"github.com/CesarBraz7/noema/schemas"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -129,6 +130,83 @@ func TestArticleFlow(t *testing.T) {
 	if got := captures.Load(); got != 1 {
 		t.Fatalf("capturas após retry e conflito = %d, esperado 1", got)
 	}
+	t.Run("YouTube", func(t *testing.T) {
+		const (
+			canonical    = "https://www.youtube.com/watch?v=abcdefghijk"
+			noCaptions   = "https://www.youtube.com/watch?v=12345678901"
+			repoLocation = "/repos/owner/artifacts/contents/"
+		)
+		videoID := videoSourcePrefix + digest([]byte(canonical))
+		partialID := videoSourcePrefix + digest([]byte(noCaptions))
+		location := func(id, url string) string {
+			return path.Join("sources", id, fingerprint(videoCaptureVersion, video.Version, url), "source-content.json")
+		}
+		var videoCaptures atomic.Int32
+		app.inspectVideo = func(_ context.Context, url string) (video.Capture, error) {
+			videoCaptures.Add(1)
+			doc := video.Capture{URL: url, Title: "Vídeo de teste", Channel: "Canal de teste", Duration: 132}
+			if url == noCaptions {
+				doc.CaptionsStatus = video.CaptionsUnavailable
+				return doc, nil
+			}
+			doc.CaptionsStatus = video.CaptionsAvailable
+			doc.Captions = &video.CaptionTrack{
+				Language: "pt-BR", Segments: []video.Segment{
+					{StartMS: 0, DurationMS: 1250, Text: "Abertura."},
+					{StartMS: 62120, DurationMS: 3000, Text: "Checkpoint de vídeo."},
+				},
+			}
+			return doc, nil
+		}
+		server.set(inbox, "- https://youtu.be/abcdefghijk?si=share\n- "+canonical+"&t=10s&list=ignored\n- "+noCaptions+"\n")
+		if err := app.Cycle(ctx, true, true); err != nil {
+			t.Fatal(err)
+		}
+		assertRowCount(t, db, "noema_sources", 3)
+		assertStates(t, db, "COMPLETED,COMPLETED,NEEDS_REVIEW,COMPLETED,NEEDS_REVIEW")
+		if got := videoCaptures.Load(); got != 2 {
+			t.Fatalf("esperava uma captura por vídeo, obtive %d", got)
+		}
+		checkpoint := server.get(repoLocation + location(videoID, canonical))
+		var saved sourceContent
+		if err := json.Unmarshal([]byte(checkpoint), &saved); err != nil || saved.Source.URL != canonical ||
+			saved.Source.Type != "video" || saved.Source.Platform != "youtube" || saved.Capture.CaptionLanguage != "pt-BR" ||
+			saved.Capture.AutomaticCaptions == nil || *saved.Capture.AutomaticCaptions || len(saved.Blocks) != 2 {
+			t.Fatalf("captura de vídeo inválida: %s (%v)", checkpoint, err)
+		}
+		first := saved.Blocks[0]
+		if first.Kind != "transcript_segment" || first.StartMS == nil || *first.StartMS != 0 ||
+			first.EndMS == nil || *first.EndMS != 1250 {
+			t.Fatalf("timestamps do primeiro bloco: %+v", first)
+		}
+		manifestPath := path.Join("sources", videoID, fingerprint(videoConsolidationVersion, digest([]byte(checkpoint)), ""), "manifest.json")
+		var savedManifest manifest
+		if err := json.Unmarshal([]byte(server.get(repoLocation+manifestPath)), &savedManifest); err != nil ||
+			len(savedManifest.Artifacts) != 2 || savedManifest.Artifacts[0].SHA256 != digest([]byte(checkpoint)) {
+			t.Fatalf("manifesto de vídeo não referencia a captura: %+v (%v)", savedManifest, err)
+		}
+		videoNote := "/repos/owner/vault/contents/Fontes/Vídeos/" + videoID + ".md"
+		if got := server.get(videoNote); !strings.Contains(got, "Trechos da legenda") ||
+			!strings.Contains(got, "00:01:02.120–00:01:05.120") || !strings.Contains(got, "`b-002`") {
+			t.Fatalf("nota do vídeo sem evidência temporal: %q", got)
+		}
+		partial := server.get(repoLocation + location(partialID, noCaptions))
+		if !strings.Contains(partial, "Nenhuma legenda compatível disponível.") ||
+			server.get("/repos/owner/vault/contents/Fontes/Vídeos/"+partialID+".md") != "" {
+			t.Fatalf("esperava apenas a captura parcial para revisão: %s", partial)
+		}
+		server.set(inbox, "- "+canonical+"\n  - Foco: checkpoint\n")
+		if err := app.Cycle(ctx, true, true); err != nil {
+			t.Fatal(err)
+		}
+		assertStates(t, db, "COMPLETED,COMPLETED,NEEDS_REVIEW,COMPLETED,NEEDS_REVIEW,COMPLETED")
+		if got := videoCaptures.Load(); got != 2 {
+			t.Fatalf("o novo foco deveria reutilizar a legenda, capturas = %d", got)
+		}
+		if got := server.get(videoNote); !strings.Contains(got, "Foco: checkpoint") {
+			t.Fatalf("nota do vídeo sem o novo foco: %q", got)
+		}
+	})
 }
 
 // Move one retry forward instead of waiting for its backoff during the test.

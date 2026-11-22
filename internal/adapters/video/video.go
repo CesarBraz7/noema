@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/url"
 	"os"
@@ -18,6 +19,17 @@ import (
 )
 
 var youtubeID = regexp.MustCompile("^[A-Za-z0-9_-]{11}$")
+
+// Version identifies the caption extractor and its output contract.
+const Version = "yt-dlp-json3-v1"
+
+const watchURL = "https://www.youtube.com/watch?v="
+
+const (
+	CaptionsUnavailable = "unavailable"
+	CaptionsFetchFailed = "fetch_failed"
+	CaptionsAvailable   = "available"
+)
 
 type Capture struct {
 	ID             string        `json:"id"`
@@ -64,7 +76,7 @@ func Inspect(ctx context.Context, raw string) (Capture, error) {
 	if err != nil {
 		return Capture{}, err
 	}
-	canonical := "https://www.youtube.com/watch?v=" + id
+	canonical := watchURL + id
 	extractCtx, cancel := context.WithTimeout(ctx, 75*time.Second)
 	defer cancel()
 	cache, err := os.MkdirTemp("", "noema-video-")
@@ -92,7 +104,7 @@ func Inspect(ctx context.Context, raw string) (Capture, error) {
 	}
 	capture := Capture{
 		ID: id, URL: canonical, Title: meta.Title, Channel: meta.Channel, Duration: meta.Duration,
-		CaptionsStatus: "unavailable",
+		CaptionsStatus: CaptionsUnavailable,
 	}
 	if capture.Channel == "" {
 		capture.Channel = meta.Uploader
@@ -109,12 +121,20 @@ func Inspect(ctx context.Context, raw string) (Capture, error) {
 		return Capture{}, ctx.Err()
 	}
 	if err != nil {
-		capture.CaptionsStatus = "fetch_failed"
+		capture.CaptionsStatus = CaptionsFetchFailed
 		return capture, nil
 	}
-	capture.CaptionsStatus = "available"
+	capture.CaptionsStatus = CaptionsAvailable
 	capture.Captions = &track
 	return capture, nil
+}
+
+func CanonicalURL(raw string) (string, error) {
+	id, err := videoID(raw)
+	if err != nil {
+		return "", err
+	}
+	return watchURL + id, nil
 }
 
 func videoID(raw string) (string, error) {
@@ -227,7 +247,7 @@ func parseSegments(reader io.Reader) ([]Segment, error) {
 	}
 	var segments []Segment
 	for _, event := range payload.Events {
-		if event.Start == nil || *event.Start < 0 || event.Duration < 0 {
+		if event.Start == nil || *event.Start < 0 || event.Duration < 0 || event.Duration > math.MaxInt64-*event.Start {
 			continue
 		}
 		var text strings.Builder

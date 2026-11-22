@@ -14,7 +14,9 @@ O fluxo de ingestão de artigos foi validado no Windows em 22 de novembro de 202
 
 Use o Docker Desktop para executar o worker e um PostgreSQL descartável para os testes de integração com a API GitHub simulada. [Testes locais](../README.md#verificar-localmente)
 
-O comando local `inspect-video` inicia a Fase 2. No Docker Desktop, ele obteve metadados e 427 trechos de legenda em inglês de um vídeo público do TED. O próximo incremento é integrar a captura à fila e persistir os trechos como evidência de vídeo. [Comando](../README.md#inspecionar-um-vídeo-do-youtube) · [Roadmap](ROADMAP.md#fase-2--vídeos)
+A Fase 2 já aceita vídeos do YouTube na inbox. O mesmo extrator usado por `inspect-video` alimenta o River, guarda as legendas com timestamps e publica uma nota em `Fontes/Vídeos/`. Links equivalentes reaproveitam a captura. Vídeos sem legenda compatível ficam em `NEEDS_REVIEW` com os metadados salvos. O próximo incremento é extrair áudio com FFmpeg, transcrever com timestamps e retomar esses pedidos. [Comando](../README.md#inspecionar-um-vídeo-do-youtube) · [Roadmap](ROADMAP.md#fase-2--vídeos)
+
+O teste local no Docker usou um vídeo público do TED, PostgreSQL descartável e a API GitHub simulada. O pedido ficou em `COMPLETED`, com 427 trechos de legenda, três artefatos e a nota de vídeo.
 
 Use `main` para os commits e pushes deste repositório. Para verificar o código no PowerShell, rode os comandos abaixo na raiz do clone.
 

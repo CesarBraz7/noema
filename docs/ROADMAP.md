@@ -21,7 +21,8 @@ O desenvolvimento e a validação funcionam no Windows com Docker Desktop. A esc
 
 ## Fase 2 — Vídeos
 - Capturar metadados e legendas com timestamps via yt-dlp. O comando manual já roda no Docker local. [Instruções](../README.md#inspecionar-um-vídeo-do-youtube)
-- Integrar a captura de vídeo à fila e persistir a evidência. Usar FFmpeg e transcrição para vídeos que precisem de extração de áudio.
+- A fila já recebe vídeos do YouTube, grava as legendas como evidência e publica notas com timestamps. O worker salva metadados para revisão quando faltam legendas.
+- Integrar FFmpeg e transcrição para vídeos que precisem de extração de áudio e permitir retomar os pedidos em revisão.
 - Criar análise multimodal com Gemini quando disponível e inspeção adicional de frames quando necessária.
 - Persistir resultados e custos por etapa e reutilizar artefatos compatíveis.
 - **Aceite:** vídeo técnico com fala, código e slides gera conhecimento rastreável.

@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/CesarBraz7/noema/internal/adapters/video"
 	"golang.org/x/net/idna"
 )
 
@@ -22,6 +23,7 @@ var (
 type Entry struct {
 	URL   string
 	Focus string
+	Video bool
 }
 
 // Parse accepts bare URLs, Markdown links and lists, including checked items.
@@ -58,10 +60,18 @@ func Parse(markdown string) []Entry {
 		if target := itemURL(item); target != "" {
 			finish()
 			canonical, err := CanonicalURL(target)
-			if err != nil || !isArticle(canonical) {
+			if err != nil {
 				continue
 			}
-			entries = append(entries, Entry{URL: canonical})
+			entry := Entry{URL: canonical}
+			if !isArticle(canonical) {
+				entry.URL, err = video.CanonicalURL(canonical)
+				if err != nil {
+					continue
+				}
+				entry.Video = true
+			}
+			entries = append(entries, entry)
 			current = len(entries) - 1
 			continue
 		}

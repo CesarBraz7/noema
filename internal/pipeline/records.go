@@ -11,12 +11,16 @@ import (
 	"unicode"
 
 	"github.com/CesarBraz7/noema/internal/adapters/article"
+	"github.com/CesarBraz7/noema/internal/adapters/video"
 )
 
 const (
-	schemaVersion        = "1.0.0"
-	captureVersion       = "article-capture-v1"
-	consolidationVersion = "article-excerpts-v1"
+	schemaVersion             = "1.0.0"
+	captureVersion            = "article-capture-v1"
+	consolidationVersion      = "article-excerpts-v1"
+	videoSourcePrefix         = "youtube-"
+	videoCaptureVersion       = "youtube-capture-v1"
+	videoConsolidationVersion = "youtube-excerpts-v1"
 )
 
 type sourceContent struct {
@@ -29,26 +33,31 @@ type sourceContent struct {
 }
 
 type metadata struct {
-	URL         string    `json:"url"`
-	ResolvedURL string    `json:"resolvedUrl,omitempty"`
-	Type        string    `json:"type"`
-	Platform    string    `json:"platform"`
-	Title       string    `json:"title"`
-	Author      string    `json:"author,omitempty"`
-	PublishedAt string    `json:"publishedAt,omitempty"`
-	CapturedAt  time.Time `json:"capturedAt"`
+	URL             string    `json:"url"`
+	ResolvedURL     string    `json:"resolvedUrl,omitempty"`
+	Type            string    `json:"type"`
+	Platform        string    `json:"platform"`
+	Title           string    `json:"title"`
+	Author          string    `json:"author,omitempty"`
+	PublishedAt     string    `json:"publishedAt,omitempty"`
+	CapturedAt      time.Time `json:"capturedAt"`
+	DurationSeconds float64   `json:"durationSeconds,omitempty"`
 }
 
 type capture struct {
-	Status  string   `json:"status"`
-	Method  string   `json:"method"`
-	Missing []string `json:"missing"`
+	Status            string   `json:"status"`
+	Method            string   `json:"method"`
+	Missing           []string `json:"missing"`
+	CaptionLanguage   string   `json:"captionLanguage,omitempty"`
+	AutomaticCaptions *bool    `json:"automaticCaptions,omitempty"`
 }
 
 type block struct {
-	ID   string `json:"id"`
-	Kind string `json:"kind"`
-	Text string `json:"text"`
+	ID      string `json:"id"`
+	Kind    string `json:"kind"`
+	Text    string `json:"text"`
+	StartMS *int64 `json:"startMs,omitempty"`
+	EndMS   *int64 `json:"endMs,omitempty"`
 }
 
 func newSource(id, canonical string, doc article.Document, now time.Time) sourceContent {
@@ -70,8 +79,35 @@ func newSource(id, canonical string, doc article.Document, now time.Time) source
 	}
 	for _, paragraph := range strings.Split(doc.Text, "\n") {
 		if text := strings.TrimSpace(paragraph); text != "" {
-			source.Blocks = append(source.Blocks, block{fmt.Sprintf("b-%03d", len(source.Blocks)+1), "paragraph", text})
+			source.Blocks = append(source.Blocks, block{ID: fmt.Sprintf("b-%03d", len(source.Blocks)+1), Kind: "paragraph", Text: text})
 		}
+	}
+	return source
+}
+
+func newVideoSource(id string, doc video.Capture, now time.Time) sourceContent {
+	source := sourceContent{
+		SchemaVersion: schemaVersion, SourceID: id, Media: []struct{}{},
+		Source: metadata{
+			URL: doc.URL, Type: "video", Platform: "youtube", Title: strings.TrimSpace(doc.Title),
+			Author: strings.TrimSpace(doc.Channel), PublishedAt: doc.PublishedAt,
+			CapturedAt: now.UTC().Truncate(time.Second), DurationSeconds: doc.Duration,
+		},
+		Capture: capture{Status: "partial", Method: "yt-dlp", Missing: []string{"Imagem e áudio não foram analisados."}},
+		Blocks:  []block{},
+	}
+	if doc.Captions == nil || len(doc.Captions.Segments) == 0 {
+		source.Capture.Missing = append(source.Capture.Missing, "Nenhuma legenda compatível disponível.")
+		return source
+	}
+	source.Capture.CaptionLanguage = doc.Captions.Language
+	source.Capture.AutomaticCaptions = &doc.Captions.Automatic
+	for i, segment := range doc.Captions.Segments {
+		start, end := segment.StartMS, segment.StartMS+segment.DurationMS
+		source.Blocks = append(source.Blocks, block{
+			ID: fmt.Sprintf("b-%03d", i+1), Kind: "transcript_segment", Text: segment.Text,
+			StartMS: &start, EndMS: &end,
+		})
 	}
 	return source
 }
@@ -108,12 +144,14 @@ type evidence struct {
 }
 
 func consolidate(source sourceContent, focus string) knowledge {
+	limitation := "A seleção de trechos não constitui uma interpretação ou verificação independente do artigo."
+	if source.Source.Type == "video" {
+		limitation = "Os trechos foram selecionados da legenda do vídeo e podem conter erros de transcrição."
+	}
 	result := knowledge{
 		SchemaVersion: schemaVersion, SourceID: source.SourceID, Title: source.Source.Title,
 		FocusNote: focus, Language: "pt-BR", Method: "extractive",
-		Coverage: coverage{Status: "partial", Unresolved: append([]string{
-			"A seleção de trechos não constitui uma interpretação ou verificação independente do artigo.",
-		}, source.Capture.Missing...)},
+		Coverage: coverage{Status: "partial", Unresolved: append([]string{limitation}, source.Capture.Missing...)},
 	}
 	focusWords := make(map[string]bool)
 	for _, word := range words(focus) {
@@ -152,13 +190,22 @@ func consolidate(source sourceContent, focus string) knowledge {
 		if len(text) > 500 {
 			excerpt = string(text[:500]) + "…"
 		}
+		locator := fmt.Sprintf("Bloco textual %d", candidate.index+1)
+		if block.StartMS != nil && block.EndMS != nil {
+			locator = timestamp(*block.StartMS) + "–" + timestamp(*block.EndMS)
+		}
 		result.Insights = append(result.Insights, insight{
 			ID: fmt.Sprintf("insight-%03d", i+1), Kind: "excerpt", Title: fmt.Sprintf("Trecho %d", i+1),
 			Explanation: excerpt, Confidence: "supported", Limitations: []string{},
-			Evidence: []evidence{{block.ID, fmt.Sprintf("Bloco textual %d", candidate.index+1)}},
+			Evidence: []evidence{{block.ID, locator}},
 		})
 	}
 	return result
+}
+
+func timestamp(ms int64) string {
+	seconds := ms / 1000
+	return fmt.Sprintf("%02d:%02d:%02d.%03d", seconds/3600, seconds/60%60, seconds%60, ms%1000)
 }
 
 func words(s string) []string {
@@ -203,12 +250,23 @@ func note(source sourceContent, knowledge knowledge, manifestPath string) []byte
 	if source.Source.PublishedAt != "" {
 		fmt.Fprintf(&body, "- Data indicada pelo extrator %s\n", source.Source.PublishedAt)
 	}
+	if source.Capture.AutomaticCaptions != nil {
+		kind := "manuais"
+		if *source.Capture.AutomaticCaptions {
+			kind = "automáticas"
+		}
+		fmt.Fprintf(&body, "- Legendas %s (%s)\n", kind, markdown(source.Capture.CaptionLanguage))
+	}
 	fmt.Fprintf(&body, "- Captura %s\n", source.Source.CapturedAt.Format(time.RFC3339))
 	fmt.Fprintf(&body, "- Manifesto de evidências no repositório de artefatos `%s`\n", manifestPath)
 	if knowledge.FocusNote != "" {
 		fmt.Fprintf(&body, "\n## Foco da inbox\n\n%s\n", markdown(knowledge.FocusNote))
 	}
-	body.WriteString("\n## Trechos do artigo\n")
+	heading := "Trechos do artigo"
+	if source.Source.Type == "video" {
+		heading = "Trechos da legenda"
+	}
+	fmt.Fprintf(&body, "\n## %s\n", heading)
 	for _, insight := range knowledge.Insights {
 		ref := insight.Evidence[0]
 		fmt.Fprintf(&body, "\n> %s\n\n%s · `%s`\n", markdown(insight.Explanation), ref.Locator, ref.SourceBlockID)

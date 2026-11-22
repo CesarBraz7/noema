@@ -9,9 +9,11 @@ import (
 	"log/slog"
 	"math/rand/v2"
 	"path"
+	"strings"
 	"time"
 
 	"github.com/CesarBraz7/noema/internal/adapters/article"
+	"github.com/CesarBraz7/noema/internal/adapters/video"
 	"github.com/CesarBraz7/noema/internal/storage/github"
 	"github.com/CesarBraz7/noema/schemas"
 	"github.com/jackc/pgx/v5"
@@ -19,15 +21,19 @@ import (
 	"github.com/riverqueue/river"
 )
 
+// Keep the persisted queue and job kind so existing article jobs can resume.
 const queueName = "noema_articles"
 
-var errReview = errors.New("revisão necessária")
+var (
+	errReview           = errors.New("revisão necessária")
+	errArtifactTooLarge = errors.New("artefato excede o limite de tamanho")
+)
 
-type articleJob struct {
+type ingestionJob struct {
 	RequestID int64 `json:"requestId"`
 }
 
-func (articleJob) Kind() string { return "noema_article" }
+func (ingestionJob) Kind() string { return "noema_article" }
 
 type request struct {
 	id       int64
@@ -36,25 +42,30 @@ type request struct {
 	focus    string
 }
 
+func (r request) isVideo() bool {
+	return strings.HasPrefix(r.sourceID, videoSourcePrefix)
+}
+
 type articleExtractor interface {
 	Extract(context.Context, string) (article.Document, error)
 }
 
-type articleWorker struct {
-	river.WorkerDefaults[articleJob]
-	db        *pgxpool.Pool
-	vault     *github.Repository
-	artifacts *github.Repository
-	extractor articleExtractor
-	validator schemas.Validator
+type ingestionWorker struct {
+	river.WorkerDefaults[ingestionJob]
+	db           *pgxpool.Pool
+	vault        *github.Repository
+	artifacts    *github.Repository
+	extractor    articleExtractor
+	inspectVideo func(context.Context, string) (video.Capture, error)
+	validator    schemas.Validator
 }
 
-func (*articleWorker) NextRetry(job *river.Job[articleJob]) time.Time {
+func (*ingestionWorker) NextRetry(job *river.Job[ingestionJob]) time.Time {
 	delay := time.Minute << min(max(job.Attempt-1, 0), 5)
 	return time.Now().Add(delay + rand.N(delay/5))
 }
 
-func (w *articleWorker) Work(ctx context.Context, job *river.Job[articleJob]) error {
+func (w *ingestionWorker) Work(ctx context.Context, job *river.Job[ingestionJob]) error {
 	req := request{id: job.Args.RequestID}
 	var state string
 	err := w.db.QueryRow(ctx, `
@@ -81,7 +92,7 @@ func (w *articleWorker) Work(ctx context.Context, job *river.Job[articleJob]) er
 			state, permanent = "NEEDS_REVIEW", true
 		case errors.Is(err, article.ErrAccess), errors.Is(err, github.ErrPermission):
 			state, permanent = "ACCESS_REQUIRED", true
-		case errors.Is(err, article.ErrUnsupported), errors.Is(err, article.ErrUnsafe):
+		case errors.Is(err, article.ErrUnsupported), errors.Is(err, article.ErrUnsafe), errors.Is(err, errArtifactTooLarge):
 			state, permanent = "FAILED", true
 		case job.Attempt >= job.MaxAttempts:
 			state = "FAILED"
@@ -89,32 +100,41 @@ func (w *articleWorker) Work(ctx context.Context, job *river.Job[articleJob]) er
 		statusCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 		defer cancel()
 		if statusErr := w.state(statusCtx, req.id, state, err.Error()); statusErr != nil {
-			return fmt.Errorf("registrar falha do artigo: %w", statusErr)
+			return fmt.Errorf("registrar falha da fonte: %w", statusErr)
 		}
 		if permanent {
 			return river.JobCancel(err)
 		}
 		return err
 	}
-	slog.Info("artigo processado", "request_id", req.id, "source_id", req.sourceID)
+	slog.Info("fonte processada", "request_id", req.id, "source_id", req.sourceID)
 	return nil
 }
 
-func (w *articleWorker) process(ctx context.Context, req request) error {
+func (w *ingestionWorker) process(ctx context.Context, req request) error {
 	root := path.Join("sources", req.sourceID)
-	capturePath := path.Join(root, fingerprint(captureVersion, article.Version, req.url), "source-content.json")
+	captureKind, extractorVersion := captureVersion, article.Version
+	consolidationKind, noteFolder, sourceType := consolidationVersion, "Artigos", "article"
+	if req.isVideo() {
+		captureKind, extractorVersion = videoCaptureVersion, video.Version
+		consolidationKind, noteFolder, sourceType = videoConsolidationVersion, "Vídeos", "video"
+	}
+	capturePath := path.Join(root, fingerprint(captureKind, extractorVersion, req.url), "source-content.json")
 	if err := w.state(ctx, req.id, "CAPTURING", ""); err != nil {
 		return err
 	}
-	source, captureRef, err := w.capture(ctx, req, capturePath)
+	source, captureRef, err := w.capture(ctx, req, capturePath, sourceType)
 	if err != nil {
 		return err
+	}
+	if len(source.Blocks) == 0 {
+		return fmt.Errorf("%w: vídeo sem legenda disponível; metadados salvos em %s", errReview, capturePath)
 	}
 	if err := w.state(ctx, req.id, "CONSOLIDATING", ""); err != nil {
 		return err
 	}
 	knowledge := consolidate(source, req.focus)
-	key := fingerprint(consolidationVersion, captureRef.SHA256, req.focus)
+	key := fingerprint(consolidationKind, captureRef.SHA256, req.focus)
 	knowledgePath := path.Join(root, key, "knowledge.json")
 	knowledgeRef, err := w.putArtifact(ctx, req.sourceID, schemas.Knowledge, knowledgePath, knowledge, []string{captureRef.SHA256})
 	if err != nil {
@@ -122,21 +142,21 @@ func (w *articleWorker) process(ctx context.Context, req request) error {
 	}
 	manifestPath := path.Join(root, key, "manifest.json")
 	if _, err := w.putArtifact(ctx, req.sourceID, schemas.Manifest, manifestPath, manifest{
-		SchemaVersion: schemaVersion, SourceID: req.sourceID, Fingerprint: key, PipelineVersion: consolidationVersion,
-		ExtractorVersion: article.Version, Artifacts: []artifact{captureRef, knowledgeRef},
+		SchemaVersion: schemaVersion, SourceID: req.sourceID, Fingerprint: key, PipelineVersion: consolidationKind,
+		ExtractorVersion: extractorVersion, Artifacts: []artifact{captureRef, knowledgeRef},
 	}, []string{captureRef.SHA256, knowledgeRef.SHA256}); err != nil {
 		return err
 	}
 	if err := w.state(ctx, req.id, "PUBLISHING", ""); err != nil {
 		return err
 	}
-	if err := w.publish(ctx, req, path.Join("Fontes", "Artigos", req.sourceID+".md"), note(source, knowledge, manifestPath)); err != nil {
+	if err := w.publish(ctx, req, path.Join("Fontes", noteFolder, req.sourceID+".md"), note(source, knowledge, manifestPath)); err != nil {
 		return err
 	}
 	return w.state(ctx, req.id, "COMPLETED", "")
 }
 
-func (w *articleWorker) capture(ctx context.Context, req request, location string) (sourceContent, artifact, error) {
+func (w *ingestionWorker) capture(ctx context.Context, req request, location, sourceType string) (sourceContent, artifact, error) {
 	var source sourceContent
 	file, err := w.artifacts.Get(ctx, location, "")
 	if err != nil {
@@ -144,7 +164,7 @@ func (w *articleWorker) capture(ctx context.Context, req request, location strin
 	}
 	if file.Exists {
 		if w.validator.Validate(schemas.Source, file.Data) != nil || json.Unmarshal(file.Data, &source) != nil ||
-			source.SourceID != req.sourceID || source.Source.URL != req.url {
+			source.SourceID != req.sourceID || source.Source.URL != req.url || source.Source.Type != sourceType {
 			return source, artifact{}, fmt.Errorf("%w: checkpoint de captura inválido", errReview)
 		}
 		ref, err := w.recordArtifact(ctx, req.sourceID, schemas.Source, location, file.Data, []string{})
@@ -157,23 +177,40 @@ func (w *articleWorker) capture(ctx context.Context, req request, location strin
 	if known {
 		return source, artifact{}, fmt.Errorf("%w: checkpoint de captura ausente", errReview)
 	}
-	doc, err := w.extractor.Extract(ctx, req.url)
+	source, err = w.extract(ctx, req)
 	if err != nil {
 		return source, artifact{}, err
 	}
-	source = newSource(req.sourceID, req.url, doc, time.Now())
 	ref, err := w.putArtifact(ctx, req.sourceID, schemas.Source, location, source, []string{})
 	return source, ref, err
 }
 
-func (w *articleWorker) putArtifact(ctx context.Context, sourceID, kind, location string, value any, dependencies []string) (artifact, error) {
+func (w *ingestionWorker) extract(ctx context.Context, req request) (sourceContent, error) {
+	if req.isVideo() {
+		videoCapture, err := w.inspectVideo(ctx, req.url)
+		if err != nil {
+			return sourceContent{}, err
+		}
+		if videoCapture.CaptionsStatus == video.CaptionsFetchFailed {
+			return sourceContent{}, errors.New("falha ao buscar a legenda do YouTube")
+		}
+		return newVideoSource(req.sourceID, videoCapture, time.Now()), nil
+	}
+	doc, err := w.extractor.Extract(ctx, req.url)
+	if err != nil {
+		return sourceContent{}, err
+	}
+	return newSource(req.sourceID, req.url, doc, time.Now()), nil
+}
+
+func (w *ingestionWorker) putArtifact(ctx context.Context, sourceID, kind, location string, value any, dependencies []string) (artifact, error) {
 	data, err := json.MarshalIndent(value, "", "  ")
 	if err != nil {
 		return artifact{}, err
 	}
 	data = append(data, '\n')
 	if len(data) > github.MaxFileSize {
-		return artifact{}, article.ErrUnsupported
+		return artifact{}, errArtifactTooLarge
 	}
 	if err := w.validator.Validate(kind, data); err != nil {
 		return artifact{}, fmt.Errorf("%w: %v", errReview, err)
@@ -200,7 +237,7 @@ func (w *articleWorker) putArtifact(ctx context.Context, sourceID, kind, locatio
 	return w.recordArtifact(ctx, sourceID, kind, location, data, dependencies)
 }
 
-func (w *articleWorker) recordArtifact(ctx context.Context, sourceID, kind, location string, data []byte, dependencies []string) (artifact, error) {
+func (w *ingestionWorker) recordArtifact(ctx context.Context, sourceID, kind, location string, data []byte, dependencies []string) (artifact, error) {
 	ref := artifact{Kind: kind, Path: location, SHA256: digest(data), Size: len(data), Dependencies: dependencies, Validated: true}
 	tag, err := w.db.Exec(ctx, `
 		INSERT INTO noema_artifacts (path, source_id, kind, sha256, size) VALUES ($1, $2, $3, $4, $5)
@@ -212,14 +249,14 @@ func (w *articleWorker) recordArtifact(ctx context.Context, sourceID, kind, loca
 	return ref, err
 }
 
-func (w *articleWorker) state(ctx context.Context, id int64, state, message string) error {
+func (w *ingestionWorker) state(ctx context.Context, id int64, state, message string) error {
 	_, err := w.db.Exec(ctx, `
 		UPDATE noema_ingestion_requests SET state = $2, last_error = NULLIF($3, ''), updated_at = now()
 		WHERE id = $1`, id, state, message)
 	return err
 }
 
-func (w *articleWorker) publish(ctx context.Context, req request, location string, data []byte) error {
+func (w *ingestionWorker) publish(ctx context.Context, req request, location string, data []byte) error {
 	var lastRequest int64
 	var lastSHA string
 	err := w.db.QueryRow(ctx, `SELECT request_id, blob_sha FROM noema_publications WHERE source_id = $1`, req.sourceID).Scan(&lastRequest, &lastSHA)
@@ -260,7 +297,11 @@ func (w *articleWorker) publish(ctx context.Context, req request, location strin
 		if tag.RowsAffected() == 0 {
 			return fmt.Errorf("%w: publicação pendente mudou desde a última tentativa", errReview)
 		}
-		if err := w.vault.Put(ctx, location, "noema: publicar nota de artigo", data, file.SHA); err != nil {
+		message := "noema: publicar nota de artigo"
+		if req.isVideo() {
+			message = "noema: publicar nota de vídeo"
+		}
+		if err := w.vault.Put(ctx, location, message, data, file.SHA); err != nil {
 			return err
 		}
 		file, err = w.vault.Get(ctx, location, "")
