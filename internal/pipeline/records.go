@@ -15,21 +15,25 @@ import (
 )
 
 const (
-	schemaVersion             = "1.0.0"
-	captureVersion            = "article-capture-v1"
-	consolidationVersion      = "article-excerpts-v1"
-	videoSourcePrefix         = "youtube-"
-	videoCaptureVersion       = "youtube-capture-v1"
-	videoConsolidationVersion = "youtube-excerpts-v1"
+	schemaVersion               = "1.0.0"
+	captureVersion              = "article-capture-v1"
+	consolidationVersion        = "article-excerpts-v1"
+	videoSourcePrefix           = "youtube-"
+	videoRequestVersion         = "youtube-audio-first-v1"
+	videoMetadataVersion        = "youtube-metadata-v1"
+	videoAudioVersion           = "youtube-audio-v2"
+	videoCaptionFallbackVersion = "youtube-caption-fallback-v1"
+	videoConsolidationVersion   = "youtube-excerpts-v2"
 )
 
 type sourceContent struct {
-	SchemaVersion string     `json:"schemaVersion"`
-	SourceID      string     `json:"sourceId"`
-	Source        metadata   `json:"source"`
-	Capture       capture    `json:"capture"`
-	Blocks        []block    `json:"blocks"`
-	Media         []struct{} `json:"media"`
+	SchemaVersion   string     `json:"schemaVersion"`
+	SourceID        string     `json:"sourceId"`
+	Source          metadata   `json:"source"`
+	Capture         capture    `json:"capture"`
+	Blocks          []block    `json:"blocks"`
+	TranscriptParts []artifact `json:"transcriptParts,omitempty"`
+	Media           []struct{} `json:"media"`
 }
 
 type metadata struct {
@@ -46,13 +50,16 @@ type metadata struct {
 }
 
 type capture struct {
-	Status             string   `json:"status"`
-	Method             string   `json:"method"`
-	Missing            []string `json:"missing"`
-	CaptionLanguage    string   `json:"captionLanguage,omitempty"`
-	AutomaticCaptions  *bool    `json:"automaticCaptions,omitempty"`
-	TranscriptLanguage string   `json:"transcriptLanguage,omitempty"`
-	TranscriptModel    string   `json:"transcriptModel,omitempty"`
+	Status             string               `json:"status"`
+	Method             string               `json:"method"`
+	Missing            []string             `json:"missing"`
+	CaptionLanguage    string               `json:"captionLanguage,omitempty"`
+	AutomaticCaptions  *bool                `json:"automaticCaptions,omitempty"`
+	TranscriptLanguage string               `json:"transcriptLanguage,omitempty"`
+	TranscriptModel    string               `json:"transcriptModel,omitempty"`
+	TranscriptModelSHA string               `json:"transcriptModelSha256,omitempty"`
+	Audio              *video.AudioEvidence `json:"audio,omitempty"`
+	CaptionsFallback   bool                 `json:"captionsFallback,omitempty"`
 }
 
 type block struct {
@@ -88,32 +95,39 @@ func newSource(id, canonical string, doc article.Document, now time.Time) source
 	return source
 }
 
-func newVideoSource(id string, doc video.Capture, now time.Time) sourceContent {
-	source := sourceContent{
+func newVideoMetadata(id string, doc video.Capture, now time.Time) sourceContent {
+	return sourceContent{
 		SchemaVersion: schemaVersion, SourceID: id, Media: []struct{}{},
 		Source: metadata{
 			URL: doc.URL, Type: "video", Platform: "youtube", Title: strings.TrimSpace(doc.Title),
 			Author: strings.TrimSpace(doc.Channel), PublishedAt: doc.PublishedAt,
 			CapturedAt: now.UTC().Truncate(time.Second), DurationSeconds: doc.Duration, Chapters: doc.Chapters,
 		},
-		Capture: capture{Status: "partial", Method: "yt-dlp", Missing: []string{"Imagem e áudio não foram analisados."}},
+		Capture: capture{Status: "partial", Method: "yt-dlp", Missing: []string{"Áudio original e imagem ainda não foram analisados."}},
 		Blocks:  []block{},
 	}
-	if doc.Captions == nil || len(doc.Captions.Segments) == 0 {
-		source.Capture.Missing = append(source.Capture.Missing, "Nenhuma legenda compatível disponível.")
-		return source
+}
+
+func captionFallbackSource(source sourceContent, track video.CaptionTrack, now time.Time) sourceContent {
+	source.Source.CapturedAt = now.UTC().Truncate(time.Second)
+	source.Capture = capture{
+		Status: "partial", Method: "yt-dlp", CaptionLanguage: track.Language, AutomaticCaptions: &track.Automatic,
+		CaptionsFallback: true, Missing: []string{"O áudio original estava indisponível. A plataforma forneceu as legendas de fallback.",
+			"A imagem não foi analisada."},
 	}
-	source.Capture.CaptionLanguage = doc.Captions.Language
-	source.Capture.AutomaticCaptions = &doc.Captions.Automatic
-	source.Blocks = timedBlocks(doc.Captions.Segments)
+	source.Blocks = timedBlocks(track.Segments)
 	return source
 }
 
 func transcribedSource(source sourceContent, transcript video.Transcript, now time.Time) sourceContent {
 	source.Source.CapturedAt = now.UTC().Truncate(time.Second)
 	source.Capture = capture{
-		Status: "partial", Method: "whisper.cpp", TranscriptLanguage: transcript.Language, TranscriptModel: video.WhisperModel,
-		Missing: []string{"Imagem não foi analisada.", "Legenda original indisponível."},
+		Status: "partial", Method: "whisper.cpp", TranscriptLanguage: transcript.Language, TranscriptModel: transcript.Model,
+		TranscriptModelSHA: transcript.ModelSHA, Audio: transcript.Audio, Missing: []string{"Imagem não foi analisada."},
+	}
+	if transcript.Audio != nil && transcript.Audio.NoSpeech > 0 {
+		source.Capture.Missing = append(source.Capture.Missing,
+			fmt.Sprintf("O ASR não reconheceu fala em %d de %d segmentos de áudio.", transcript.Audio.NoSpeech, transcript.Audio.Parts))
 	}
 	source.Blocks = timedBlocks(transcript.Segments)
 	return source
@@ -257,6 +271,13 @@ func fingerprint(parts ...string) string {
 	return digest(data)
 }
 
+func requestFingerprint(sourceID, focus string) string {
+	if strings.HasPrefix(sourceID, videoSourcePrefix) {
+		return fingerprint(sourceID, focus, videoRequestVersion)
+	}
+	return fingerprint(sourceID, focus)
+}
+
 func digest(data []byte) string {
 	hash := sha256.Sum256(data)
 	return hex.EncodeToString(hash[:])
@@ -277,10 +298,14 @@ func note(source sourceContent, knowledge knowledge, manifestPath string) []byte
 		if *source.Capture.AutomaticCaptions {
 			kind = "automáticas"
 		}
-		fmt.Fprintf(&body, "- Legendas %s (%s)\n", kind, markdown(source.Capture.CaptionLanguage))
+		if source.Capture.CaptionsFallback {
+			fmt.Fprintf(&body, "- Fallback de legendas %s do YouTube (%s)\n", kind, markdown(source.Capture.CaptionLanguage))
+		} else {
+			fmt.Fprintf(&body, "- Legendas %s (%s)\n", kind, markdown(source.Capture.CaptionLanguage))
+		}
 	}
 	if source.Capture.TranscriptLanguage != "" {
-		fmt.Fprintf(&body, "- Transcrição local com Whisper %s (%s)\n", markdown(source.Capture.TranscriptModel), markdown(source.Capture.TranscriptLanguage))
+		fmt.Fprintf(&body, "- Transcrição do áudio original com Whisper %s (%s)\n", markdown(source.Capture.TranscriptModel), markdown(source.Capture.TranscriptLanguage))
 	}
 	fmt.Fprintf(&body, "- Captura %s\n", source.Source.CapturedAt.Format(time.RFC3339))
 	fmt.Fprintf(&body, "- Manifesto de evidências no repositório de artefatos `%s`\n", manifestPath)

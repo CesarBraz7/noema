@@ -15,7 +15,7 @@ import (
 
 const version = "0.1.0"
 
-const usage = "uso: noema {version|migrate|once|run|inspect-video URL|retry-video URL}"
+const usage = "uso: noema {version|migrate|once|run|inspect-video [--captions] URL|retry-video URL}"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -31,8 +31,12 @@ func run(ctx context.Context, args []string) error {
 	case len(args) == 0 || len(args) == 1 && (args[0] == "--help" || args[0] == "help"):
 		fmt.Println(usage)
 		return nil
-	case len(args) == 2 && args[0] == "inspect-video":
-		capture, err := video.Inspect(ctx, args[1])
+	case (len(args) == 2 || len(args) == 3 && args[1] == "--captions") && args[0] == "inspect-video":
+		inspect := video.Discover
+		if len(args) == 3 {
+			inspect = video.Inspect
+		}
+		capture, err := inspect(ctx, args[len(args)-1])
 		if err != nil {
 			return err
 		}
@@ -56,7 +60,7 @@ func run(ctx context.Context, args []string) error {
 	case "migrate":
 		return pipeline.Migrate(ctx, databaseURL())
 	case "inspect-video":
-		return errors.New("uso: noema inspect-video URL")
+		return errors.New("uso: noema inspect-video [--captions] URL")
 	case "retry-video":
 		return errors.New("uso: noema retry-video URL")
 	case "once", "run":

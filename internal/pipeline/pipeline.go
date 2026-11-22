@@ -29,23 +29,27 @@ import (
 var migration string
 
 const (
-	inboxPath     = "Inbox/links.md"
-	pollInterval  = 15 * time.Minute
-	retryInterval = 2 * time.Hour
-	workerLock    = int64(0x4e6f656d61)
+	inboxPath           = "Inbox/links.md"
+	pollInterval        = 15 * time.Minute
+	retryInterval       = 2 * time.Hour
+	workerLock          = int64(0x4e6f656d61)
+	defaultVideoAttempt = 15 * time.Minute
 )
 
 var repositoryName = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_.-]*$`)
 
 type App struct {
-	database        string
-	vault           *github.Repository
-	artifacts       *github.Repository
-	extractor       articleExtractor
-	inspectVideo    func(context.Context, string) (video.Capture, error)
-	transcribeVideo func(context.Context, video.Capture) (video.Transcript, error)
-	validator       schemas.Validator
-	etag            string
+	database           string
+	vault              *github.Repository
+	artifacts          *github.Repository
+	extractor          articleExtractor
+	discoverVideo      func(context.Context, string) (video.Capture, error)
+	readCaptions       func(context.Context, string) (video.Capture, error)
+	transcribeVideo    func(context.Context, video.Capture) (video.Transcript, error)
+	transcriberVersion string
+	videoAttempt       time.Duration
+	validator          schemas.Validator
+	etag               string
 }
 
 func FromEnv(ctx context.Context, database string) (*App, error) {
@@ -71,15 +75,38 @@ func FromEnv(ctx context.Context, database string) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	window, err := envDuration("NOEMA_ASR_CHUNK_DURATION", 5*time.Minute)
+	if err != nil {
+		return nil, err
+	}
+	attempt, err := envDuration("NOEMA_VIDEO_ATTEMPT_TIMEOUT", defaultVideoAttempt)
+	if err != nil {
+		return nil, err
+	}
 	app := &App{
-		database: database, validator: validator, extractor: extractor, inspectVideo: video.Inspect,
+		database: database, validator: validator, extractor: extractor, discoverVideo: video.Discover,
+		readCaptions: video.Inspect, videoAttempt: attempt,
 		vault:     github.New("https://api.github.com", owner, vault, vaultToken),
 		artifacts: github.New("https://api.github.com", owner, artifacts, artifactsToken),
 	}
-	if model, err := os.Stat(video.WhisperModelPath); err == nil && model.Mode().IsRegular() {
-		app.transcribeVideo = video.Transcribe
+	modelPath := envDefault("NOEMA_WHISPER_MODEL", video.WhisperModelPath)
+	transcriber, err := video.NewTranscriber(envDefault("NOEMA_WORK_DIR", "data"), modelPath, window)
+	if errors.Is(err, os.ErrNotExist) && os.Getenv("NOEMA_WHISPER_MODEL") == "" {
+		return app, nil
 	}
+	if err != nil {
+		return nil, fmt.Errorf("configurar ASR local: %w", err)
+	}
+	app.transcribeVideo, app.transcriberVersion = transcriber.Transcribe, transcriber.Version()
 	return app, nil
+}
+
+func envDuration(name string, fallback time.Duration) (time.Duration, error) {
+	value, err := time.ParseDuration(envDefault(name, fallback.String()))
+	if err != nil || value <= 0 {
+		return 0, fmt.Errorf("%s precisa ser uma duração positiva", name)
+	}
+	return value, nil
 }
 
 func envDefault(key, fallback string) string {
@@ -223,23 +250,30 @@ func enqueue(ctx context.Context, db *pgxpool.Pool, entries []inbox.Entry) error
 			if _, err := tx.Exec(ctx, `INSERT INTO noema_sources (id, canonical_url) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`, id, entry.URL); err != nil {
 				return err
 			}
-			var requestID int64
-			err := tx.QueryRow(ctx, `
-				INSERT INTO noema_ingestion_requests (source_id, fingerprint, focus) VALUES ($1, $2, $3)
-				ON CONFLICT (fingerprint) DO NOTHING RETURNING id`, id, fingerprint(id, entry.Focus), entry.Focus).Scan(&requestID)
-			if errors.Is(err, pgx.ErrNoRows) {
-				continue
-			}
+			requestID, err := insertRequest(ctx, tx, id, entry.Focus)
 			if err != nil {
 				return err
 			}
-			job := ingestionJob{RequestID: requestID, Transcribe: entry.Video}
-			if _, err := client.InsertTx(ctx, tx, job, &river.InsertOpts{Queue: queueName, MaxAttempts: 3}); err != nil {
-				return err
+			if requestID != 0 {
+				job := ingestionJob{RequestID: requestID, Transcribe: entry.Video}
+				if _, err := client.InsertTx(ctx, tx, job, &river.InsertOpts{Queue: queueName, MaxAttempts: 3}); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
 	})
+}
+
+func insertRequest(ctx context.Context, tx pgx.Tx, sourceID, focus string) (int64, error) {
+	var id int64
+	err := tx.QueryRow(ctx, `
+		INSERT INTO noema_ingestion_requests (source_id, fingerprint, focus) VALUES ($1, $2, $3)
+		ON CONFLICT (fingerprint) DO NOTHING RETURNING id`, sourceID, requestFingerprint(sourceID, focus), focus).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return 0, nil
+	}
+	return id, err
 }
 
 func (a *App) drain(ctx context.Context, db *pgxpool.Pool) (err error) {
@@ -288,7 +322,8 @@ func (a *App) work(ctx context.Context, db *pgxpool.Pool) (err error) {
 	workers := river.NewWorkers()
 	river.AddWorker(workers, &ingestionWorker{
 		db: db, vault: a.vault, artifacts: a.artifacts, validator: a.validator,
-		extractor: a.extractor, inspectVideo: a.inspectVideo, transcribeVideo: a.transcribeVideo,
+		extractor: a.extractor, discoverVideo: a.discoverVideo, readCaptions: a.readCaptions,
+		transcribeVideo: a.transcribeVideo, transcriberVersion: a.transcriberVersion, videoAttempt: a.videoAttempt,
 	})
 	client, err := river.NewClient(riverpgxv5.New(db), &river.Config{
 		Queues: map[string]river.QueueConfig{queueName: {MaxWorkers: 1}}, Workers: workers,

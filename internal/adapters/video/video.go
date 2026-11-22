@@ -1,4 +1,4 @@
-// Package video inspects public YouTube videos and retrieves a timed caption track.
+// Package video captures metadata and audio from public YouTube videos.
 package video
 
 import (
@@ -20,8 +20,8 @@ import (
 
 var youtubeID = regexp.MustCompile("^[A-Za-z0-9_-]{11}$")
 
-// Version identifies the caption extractor and its output contract.
-const Version = "yt-dlp-json3-v1"
+const MetadataVersion = "yt-dlp-metadata-v1"
+const CaptionVersion = "yt-dlp-json3-v1"
 
 const watchURL = "https://www.youtube.com/watch?v="
 
@@ -39,7 +39,7 @@ type Capture struct {
 	Duration       float64       `json:"durationSeconds,omitempty"`
 	PublishedAt    string        `json:"publishedAt,omitempty"`
 	Chapters       []Chapter     `json:"chapters,omitempty"`
-	CaptionsStatus string        `json:"captionsStatus"`
+	CaptionsStatus string        `json:"captionsStatus,omitempty"`
 	Captions       *CaptionTrack `json:"captions,omitempty"`
 }
 
@@ -85,7 +85,17 @@ type chapterMetadata struct {
 	End   *float64 `json:"end_time"`
 }
 
+// Discover reads metadata without selecting or downloading a caption track.
+func Discover(ctx context.Context, raw string) (Capture, error) {
+	return inspect(ctx, raw, false)
+}
+
+// Inspect checks the platform's captions for diagnostics and declared fallback.
 func Inspect(ctx context.Context, raw string) (Capture, error) {
+	return inspect(ctx, raw, true)
+}
+
+func inspect(ctx context.Context, raw string, readCaptions bool) (Capture, error) {
 	id, err := videoID(raw)
 	if err != nil {
 		return Capture{}, err
@@ -98,10 +108,14 @@ func Inspect(ctx context.Context, raw string) (Capture, error) {
 		return Capture{}, fmt.Errorf("preparar diretório temporário para yt-dlp: %w", err)
 	}
 	defer os.RemoveAll(cache)
+	fields := "id,title,channel,uploader,upload_date,duration,chapters"
+	if readCaptions {
+		fields += ",language,subtitles,automatic_captions"
+	}
 	cmd := exec.CommandContext(extractCtx, "yt-dlp", "--ignore-config", "--no-plugin-dirs", "--no-cache-dir",
 		"--use-extractors", "youtube", "--no-playlist", "--skip-download", "--ignore-no-formats-error",
 		"--socket-timeout", "15", "--retries", "1",
-		"--print", "%(.{id,title,channel,uploader,upload_date,duration,language,chapters,subtitles,automatic_captions})j", "--", canonical)
+		"--print", "%(.{"+fields+"})j", "--", canonical)
 	cmd.Env = extractorEnv(cache)
 	output, err := cmd.Output()
 	switch {
@@ -110,6 +124,9 @@ func Inspect(ctx context.Context, raw string) (Capture, error) {
 	case errors.Is(err, exec.ErrNotFound):
 		return Capture{}, errors.New("instale yt-dlp no PATH ou use a imagem Docker do Noema")
 	case err != nil:
+		if errors.Is(audioDownloadError(err), ErrAudioAccess) {
+			return Capture{}, ErrAudioAccess
+		}
 		return Capture{}, errors.New("yt-dlp não conseguiu obter os metadados do vídeo público")
 	}
 	var meta metadata
@@ -118,7 +135,7 @@ func Inspect(ctx context.Context, raw string) (Capture, error) {
 	}
 	capture := Capture{
 		ID: id, URL: canonical, Title: meta.Title, Channel: meta.Channel, Duration: meta.Duration,
-		CaptionsStatus: CaptionsUnavailable, Chapters: timedChapters(meta.Chapters),
+		Chapters: timedChapters(meta.Chapters),
 	}
 	if capture.Channel == "" {
 		capture.Channel = meta.Uploader
@@ -126,6 +143,10 @@ func Inspect(ctx context.Context, raw string) (Capture, error) {
 	if date, err := time.Parse("20060102", meta.UploadDate); err == nil {
 		capture.PublishedAt = date.Format(time.DateOnly)
 	}
+	if !readCaptions {
+		return capture, nil
+	}
+	capture.CaptionsStatus = CaptionsUnavailable
 	target, track := chooseTrack(meta)
 	if target == "" {
 		return capture, nil

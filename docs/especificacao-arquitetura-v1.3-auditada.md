@@ -5,7 +5,7 @@
 
 > **Versão:** 1.3 — decisões confirmadas vs. propostas separadas  
 > **Data da revisão:** 22 de novembro de 2026  
-> **Status:** desenvolvimento local em andamento; o código atual de vídeo ainda diverge da política áudio-original-primeiro.
+> **Status:** desenvolvimento local em andamento. O fluxo de transcrição pelo áudio original está implementado para o YouTube. [Handoff](HANDOFF.md#continuar-no-windows)
 > **Idioma dos artefatos finais:** português brasileiro, preservando termos originais e citações quando necessário
 
 ---
@@ -22,7 +22,7 @@
 
 **Ponto de ambiguidade a resolver antes de automações editoriais invasivas:** anteriormente o usuário pediu **uma nota independente por vídeo, com correlações/comparações quando solicitadas**. Posteriormente concordou com notas de fontes e conceitos conectados. Isso não autoriza presumir mesclagem automática irrestrita. Até definição, preservar nota por fonte, permitir links/sugestões e exigir revisão para mesclar/reescrever o conteúdo de fontes diferentes. Essa salvaguarda é provisória, não uma escolha definitiva atribuída ao usuário.
 
-**Situação real do código:** os arquivos `internal/adapters/video/video.go` e `transcribe.go` priorizam legendas e usam Whisper local apenas quando elas faltam, com os limites citados. **Atualizar o documento não altera esse comportamento.** Ajuste de código e testes é trabalho pendente.
+**Situação do código na auditoria:** a implementação priorizava legendas e usava Whisper local apenas quando elas faltavam, com os limites citados. O [handoff](HANDOFF.md#continuar-no-windows) registra a correção e a validação.
 
 Registro detalhado: [Auditoria de decisões](AUDITORIA-DECISOES-2026-11-22.md).
 

@@ -42,7 +42,22 @@
         "captionLanguage": { "type": "string", "minLength": 1 },
         "automaticCaptions": { "type": "boolean" },
         "transcriptLanguage": { "type": "string", "minLength": 1 },
-        "transcriptModel": { "type": "string", "minLength": 1 }
+        "transcriptModel": { "type": "string", "minLength": 1 },
+        "transcriptModelSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "captionsFallback": { "type": "boolean" },
+        "audio": {
+          "type": "object",
+          "required": ["file", "sha256", "size", "startMs", "endMs", "parts"],
+          "properties": {
+            "file": { "type": "string", "minLength": 1 },
+            "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+            "size": { "type": "integer", "minimum": 1 },
+            "startMs": { "type": "integer", "minimum": 0 },
+            "endMs": { "type": "integer", "minimum": 1 },
+            "parts": { "type": "integer", "minimum": 1 },
+            "partsWithoutRecognizedSpeech": { "type": "integer", "minimum": 0 }
+          }
+        }
       }
     },
     "blocks": {
@@ -56,6 +71,22 @@
           "text": { "type": "string", "minLength": 1 },
           "startMs": { "type": "integer", "minimum": 0 },
           "endMs": { "type": "integer", "minimum": 0 }
+        }
+      }
+    },
+    "transcriptParts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": ["kind", "path", "sha256", "size", "dependencies", "validated"],
+        "properties": {
+          "kind": { "const": "transcript-part" },
+          "path": { "type": "string", "minLength": 1 },
+          "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+          "size": { "type": "integer", "minimum": 1 },
+          "dependencies": { "type": "array", "maxItems": 0 },
+          "validated": { "const": true }
         }
       }
     },
@@ -73,15 +104,27 @@
         }
       }
     },
+    "allOf": [{
+      "if": { "required": ["transcriptParts"] },
+      "then": { "properties": { "blocks": { "maxItems": 0 } } }
+    }],
     "if": { "properties": { "capture": { "properties": { "method": { "const": "whisper.cpp" } } } } },
     "then": {
       "properties": {
-        "capture": { "required": ["transcriptLanguage", "transcriptModel"] },
-        "blocks": { "minItems": 1 }
-      }
+        "capture": { "required": ["transcriptLanguage", "transcriptModel"] }
+      },
+      "anyOf": [
+        { "properties": { "blocks": { "minItems": 1 } } },
+        { "required": ["transcriptParts"] }
+      ]
     },
     "else": {
-      "if": { "properties": { "blocks": { "minItems": 1 } } },
+      "if": {
+        "anyOf": [
+          { "properties": { "blocks": { "minItems": 1 } } },
+          { "required": ["transcriptParts"] }
+        ]
+      },
       "then": { "properties": { "capture": { "required": ["captionLanguage", "automaticCaptions"] } } },
       "else": { "properties": { "capture": { "properties": { "status": { "const": "partial" } } } } }
     }

@@ -14,9 +14,10 @@ import (
 var definitions embed.FS
 
 const (
-	Source    = "source-content"
-	Knowledge = "knowledge"
-	Manifest  = "artifact-manifest"
+	Source         = "source-content"
+	Knowledge      = "knowledge"
+	Manifest       = "artifact-manifest"
+	TranscriptPart = "transcript-part"
 )
 
 type Validator map[string]*jsonschema.Schema
@@ -25,7 +26,7 @@ func New() (Validator, error) {
 	compiler := jsonschema.NewCompiler()
 	compiler.AssertFormat()
 	validator := make(Validator)
-	for _, name := range []string{Source, Knowledge, Manifest} {
+	for _, name := range []string{Source, Knowledge, Manifest, TranscriptPart} {
 		file := name + ".schema.json"
 		data, err := definitions.ReadFile(file)
 		if err != nil {

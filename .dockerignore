@@ -3,3 +3,5 @@
 .env.*
 .neon
 node_modules
+data
+tmp

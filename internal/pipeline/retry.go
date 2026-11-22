@@ -10,7 +10,7 @@ import (
 	"github.com/riverqueue/river/riverdriver/riverpgxv5"
 )
 
-// RetryVideo requeues requests that were set aside because captionless videos had no transcriber.
+// RetryVideo resumes requests in review after a video capture issue.
 func RetryVideo(ctx context.Context, database, rawURL string) (int, error) {
 	canonical, err := video.CanonicalURL(rawURL)
 	if err != nil {
@@ -36,30 +36,53 @@ func RetryVideo(ctx context.Context, database, rawURL string) (int, error) {
 			return errors.New("o worker está processando a fila; tente reenfileirar após o ciclo")
 		}
 
+		sourceID := videoSourcePrefix + digest([]byte(canonical))
+		reasons := []string{
+			errReview.Error() + ": " + missingCaptionsReview,
+			errReview.Error() + ": " + missingASRReview,
+			errReview.Error() + ": " + video.ErrAudioUnavailable.Error() + ": a duração precisa estar entre ",
+			errReview.Error() + ": " + video.ErrNoSpeech.Error(),
+			errReview.Error() + ": áudio original e legenda de fallback indisponíveis",
+		}
+		type review struct {
+			ID          int64
+			Fingerprint string
+			Focus       string
+		}
 		rows, err := tx.Query(ctx, `
-			SELECT id FROM noema_ingestion_requests
-			WHERE source_id = $1 AND state = 'NEEDS_REVIEW' AND starts_with(last_error, $2)
-			ORDER BY id`, videoSourcePrefix+digest([]byte(canonical)), errReview.Error()+": "+missingCaptionsReview)
+			SELECT DISTINCT ON (focus) id, fingerprint, focus FROM noema_ingestion_requests
+			WHERE source_id = $1 AND state = 'NEEDS_REVIEW'
+			AND EXISTS (SELECT 1 FROM unnest($2::text[]) AS reason WHERE starts_with(last_error, reason))
+			ORDER BY focus, id DESC`, sourceID, reasons)
 		if err != nil {
 			return err
 		}
-		requests, err := pgx.CollectRows(rows, pgx.RowTo[int64])
+		requests, err := pgx.CollectRows(rows, pgx.RowToStructByPos[review])
 		if err != nil {
 			return err
 		}
-		for _, id := range requests {
-			job := ingestionJob{RequestID: id, Transcribe: true}
-			if _, err := client.InsertTx(ctx, tx, job, &river.InsertOpts{Queue: queueName, MaxAttempts: 3}); err != nil {
-				return err
-			}
-			if _, err := tx.Exec(ctx, `
+		for _, request := range requests {
+			id := request.ID
+			if request.Fingerprint != requestFingerprint(sourceID, request.Focus) {
+				id, err = insertRequest(ctx, tx, sourceID, request.Focus)
+				if err != nil {
+					return err
+				}
+				if id == 0 {
+					continue
+				}
+			} else if _, err := tx.Exec(ctx, `
 				UPDATE noema_ingestion_requests
 				SET state = 'PENDING', last_error = NULL, updated_at = now()
 				WHERE id = $1`, id); err != nil {
 				return err
 			}
+			job := ingestionJob{RequestID: id, Transcribe: true}
+			if _, err := client.InsertTx(ctx, tx, job, &river.InsertOpts{Queue: queueName, MaxAttempts: 3}); err != nil {
+				return err
+			}
+			count++
 		}
-		count = len(requests)
 		return nil
 	})
 	if err != nil {

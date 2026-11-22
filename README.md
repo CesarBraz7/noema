@@ -2,11 +2,11 @@
 
 **Pipeline pessoal de ingestão e consolidação de conhecimento.**
 
-O Noema transforma links em conhecimento rastreável no Obsidian. A ingestão cobre artigos web e vídeos públicos do YouTube com legendas ou áudio que possa ser transcrito localmente.
+O Noema transforma links em conhecimento rastreável no Obsidian. A ingestão cobre artigos web e vídeos públicos do YouTube.
 
 > **Fase 1.** A ingestão de artigos usa GitHub, PostgreSQL, River OSS e Trafilatura. A síntese seleciona trechos localmente, com referência ao bloco capturado e sem chamadas de IA.
 
-> **Alerta de conformidade (22/11/2026):** o protótipo de vídeos **ainda** prioriza legendas e só extrai o áudio/usa Whisper local quando faltam legendas (limites de 20 min e 64 MiB). Isso contraria a política esclarecida de **áudio original → ASR primeiro**. Veja [auditoria](docs/AUDITORIA-DECISOES-2026-11-22.md) e [especificação auditada](docs/especificacao-arquitetura-v1.3-auditada.md). Não declarar a Fase 2 concluída antes da correção e testes.
+> **Fase 2 em andamento.** Vídeos do YouTube já passam pela extração e transcrição do áudio original. A análise visual e multimodal segue pendente. [Roadmap](docs/ROADMAP.md#fase-2--vídeos)
 
 ## Repositórios
 
@@ -61,9 +61,11 @@ A captura `source-content.json` é reutilizada quando o mesmo artigo é reenviad
 
 Para vídeos, o worker guarda os metadados e a origem do texto em `source-content.json`, com início e fim de cada trecho em milissegundos. A nota em `Fontes/Vídeos/` referencia esses intervalos. Links equivalentes reaproveitam a captura e o mesmo pedido quando o foco é igual.
 
-**Comportamento atual provisório, divergente da política corrigida:** quando o YouTube não oferece uma legenda compatível, a imagem Docker extrai o áudio com FFmpeg e transcreve com Whisper `tiny-q5_1` no próprio contêiner. A implementação atual limita esse fallback a 20 minutos e 64 MiB de áudio para conter o uso de recursos. O limite de duração é provisório. A especificação prevê transcrição em partes para vídeos longos. O Noema conserva os metadados e a transcrição em checkpoints separados e apaga o áudio temporário ao fim de cada tentativa. Se o áudio não puder ser transcrito, o pedido fica em revisão ou registra a restrição de acesso. Falhas temporárias entram nas tentativas do River. [Especificação auditada](docs/especificacao-arquitetura-v1.3-auditada.md#82-vídeos-três-responsabilidades-distintas)
+O worker baixa a faixa original com yt-dlp, normaliza o áudio com FFmpeg e transcreve com Whisper local. O processamento ocorre em partes e retoma do último segmento salvo, sem teto global de duração ou tamanho do áudio. O Docker Compose mantém o áudio e os checkpoints em `data/`. Legendas entram como fallback declarado quando a faixa original estiver definitivamente indisponível. Restrições de acesso ficam registradas, e falhas temporárias entram nas tentativas do River. [Especificação auditada](docs/especificacao-arquitetura-v1.3-auditada.md#82-vídeos-três-responsabilidades-distintas)
 
-Para retomar um pedido antigo que ficou em revisão por falta de legenda antes da transcrição local, reenfileire o vídeo e rode um ciclo manual.
+`NOEMA_WORK_HOST_DIR` permite escolher o diretório montado pelo Docker Compose. `NOEMA_ASR_CHUNK_DURATION` define o tamanho dos segmentos (padrão `5m`) e `NOEMA_VIDEO_ATTEMPT_TIMEOUT` define o orçamento de tempo por tentativa de vídeo (padrão `15m`). A imagem inclui o modelo local Whisper `tiny-q5_1` para desenvolvimento. `NOEMA_WHISPER_MODEL` permite informar outro modelo acessível no contêiner.
+
+Para retomar um pedido em revisão por falta de legenda, ausência de ASR ou pelo antigo limite de duração, reenfileire o vídeo e rode um ciclo manual.
 
 ```powershell
 docker compose --env-file .env.local -f deploy/compose.yaml run --build --rm noema retry-video 'https://www.youtube.com/watch?v=VIDEO_ID'
@@ -78,7 +80,7 @@ Troque `VIDEO_ID` pelo identificador de um vídeo público e execute no PowerShe
 docker compose -f deploy/compose.yaml run --build --rm noema inspect-video 'https://www.youtube.com/watch?v=VIDEO_ID'
 ```
 
-O comando imprime metadados, capítulos disponíveis e uma faixa de legendas em JSON. Os capítulos têm início e fim em milissegundos. Cada trecho de legenda tem início e duração. O comando prioriza legendas manuais e pode usar a faixa automática original. `captionsStatus` informa se a legenda foi obtida (`available`), se nenhuma faixa compatível foi encontrada (`unavailable`) ou se a leitura falhou (`fetch_failed`). Para gravar artefatos e publicar a nota com links para os capítulos, use a inbox e execute `once`.
+O comando imprime metadados e capítulos disponíveis em JSON. Os capítulos têm início e fim em milissegundos. Para diagnosticar legendas, passe `inspect-video --captions URL`. Nesse modo, `captionsStatus` informa se a legenda foi obtida (`available`), se nenhuma faixa compatível foi encontrada (`unavailable`) ou se a leitura falhou (`fetch_failed`). Para gravar artefatos e publicar a nota com links para os capítulos, use a inbox e execute `once`.
 
 ## Verificar localmente
 

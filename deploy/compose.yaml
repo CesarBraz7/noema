@@ -13,6 +13,14 @@ services:
       - GITHUB_TOKEN
       - GITHUB_VAULT_TOKEN
       - GITHUB_ARTIFACTS_TOKEN
+      - NOEMA_WORK_DIR=/var/lib/noema
+      - NOEMA_ASR_CHUNK_DURATION
+      - NOEMA_VIDEO_ATTEMPT_TIMEOUT
+      - NOEMA_WHISPER_MODEL
+    volumes:
+      - type: bind
+        source: ${NOEMA_WORK_HOST_DIR:-../data}
+        target: /var/lib/noema
     restart: unless-stopped
     stop_grace_period: 20s
     mem_limit: 512m

@@ -133,130 +133,177 @@ func TestArticleFlow(t *testing.T) {
 	t.Run("YouTube", func(t *testing.T) {
 		const (
 			canonical    = "https://www.youtube.com/watch?v=abcdefghijk"
-			noCaptions   = "https://www.youtube.com/watch?v=12345678901"
+			fallback     = "https://www.youtube.com/watch?v=12345678901"
+			restricted   = "https://www.youtube.com/watch?v=ZYXWVUTSRQP"
+			legacyReview = "https://www.youtube.com/watch?v=09876543210"
 			repoLocation = "/repos/owner/artifacts/contents/"
 		)
-		videoID := videoSourcePrefix + digest([]byte(canonical))
-		partialID := videoSourcePrefix + digest([]byte(noCaptions))
-		location := func(id, url string) string {
-			return path.Join("sources", id, fingerprint(videoCaptureVersion, video.Version, url), "source-content.json")
+		sourceID := func(url string) string { return videoSourcePrefix + digest([]byte(url)) }
+		metadataPath := func(url string) string {
+			return path.Join("sources", sourceID(url), fingerprint(videoMetadataVersion, video.MetadataVersion, url), "source-content.json")
 		}
-		var videoCaptures atomic.Int32
-		app.inspectVideo = func(_ context.Context, url string) (video.Capture, error) {
-			videoCaptures.Add(1)
-			doc := video.Capture{URL: url, Title: "Vídeo de teste", Channel: "Canal de teste", Duration: 132}
-			if url == noCaptions {
-				doc.CaptionsStatus = video.CaptionsUnavailable
-				return doc, nil
+		notePath := func(url string) string {
+			return "/repos/owner/vault/contents/Fontes/Vídeos/" + sourceID(url) + ".md"
+		}
+		seedLegacy := func(url, state, reason string) {
+			t.Helper()
+			if _, err := db.Exec(ctx, "INSERT INTO noema_sources (id, canonical_url) VALUES ($1, $2)", sourceID(url), url); err != nil {
+				t.Fatal(err)
 			}
-			doc.CaptionsStatus = video.CaptionsAvailable
-			doc.Chapters = []video.Chapter{
-				{Title: "Introdução", StartMS: 0, EndMS: 62120},
-				{Title: "Checkpoints", StartMS: 62120, EndMS: 132000},
+			if _, err := db.Exec(ctx, "INSERT INTO noema_ingestion_requests (source_id, fingerprint, focus, state, last_error) VALUES ($1, $2, '', $3, $4)",
+				sourceID(url), fingerprint(sourceID(url), ""), state, reason); err != nil {
+				t.Fatal(err)
 			}
-			doc.Captions = &video.CaptionTrack{
-				Language: "pt-BR", Segments: []video.Segment{
-					{StartMS: 0, DurationMS: 1250, Text: "Abertura."},
-					{StartMS: 62120, DurationMS: 3000, Text: "Checkpoint de vídeo."},
-				},
+		}
+		assertVideoState := func(url, focus, want string) {
+			t.Helper()
+			var got string
+			err := db.QueryRow(ctx, "SELECT state FROM noema_ingestion_requests WHERE fingerprint = $1",
+				requestFingerprint(sourceID(url), focus)).Scan(&got)
+			if err != nil || got != want {
+				t.Fatalf("estado do vídeo %q com foco %q = %q, esperado %q (%v)", url, focus, got, want, err)
 			}
-			return doc, nil
 		}
-		server.set(inbox, "- https://youtu.be/abcdefghijk?si=share\n- "+canonical+"&t=10s&list=ignored\n- "+noCaptions+"\n")
-		if err := app.Cycle(ctx, true, true); err != nil {
-			t.Fatal(err)
-		}
-		assertRowCount(t, db, "noema_sources", 3)
-		assertStates(t, db, "COMPLETED,COMPLETED,NEEDS_REVIEW,COMPLETED,NEEDS_REVIEW")
-		if got := videoCaptures.Load(); got != 2 {
-			t.Fatalf("esperava uma captura por vídeo, obtive %d", got)
-		}
-		checkpoint := server.get(repoLocation + location(videoID, canonical))
-		var saved sourceContent
-		if err := json.Unmarshal([]byte(checkpoint), &saved); err != nil || saved.Source.URL != canonical ||
-			saved.Source.Type != "video" || saved.Source.Platform != "youtube" || saved.Capture.CaptionLanguage != "pt-BR" ||
-			saved.Capture.AutomaticCaptions == nil || *saved.Capture.AutomaticCaptions || len(saved.Blocks) != 2 ||
-			len(saved.Source.Chapters) != 2 || saved.Source.Chapters[1].StartMS != 62120 {
-			t.Fatalf("captura de vídeo inválida: %s (%v)", checkpoint, err)
-		}
-		first := saved.Blocks[0]
-		if first.Kind != "transcript_segment" || first.StartMS == nil || *first.StartMS != 0 ||
-			first.EndMS == nil || *first.EndMS != 1250 {
-			t.Fatalf("timestamps do primeiro bloco: %+v", first)
-		}
-		manifestPath := path.Join("sources", videoID, fingerprint(videoConsolidationVersion, digest([]byte(checkpoint)), ""), "manifest.json")
-		var savedManifest manifest
-		if err := json.Unmarshal([]byte(server.get(repoLocation+manifestPath)), &savedManifest); err != nil ||
-			len(savedManifest.Artifacts) != 2 || savedManifest.Artifacts[0].SHA256 != digest([]byte(checkpoint)) {
-			t.Fatalf("manifesto de vídeo não referencia a captura: %+v (%v)", savedManifest, err)
-		}
-		videoNote := "/repos/owner/vault/contents/Fontes/Vídeos/" + videoID + ".md"
-		if got := server.get(videoNote); !strings.Contains(got, "Trechos da legenda") ||
-			!strings.Contains(got, "00:01:02.120–00:01:05.120") || !strings.Contains(got, "`b-002`") {
-			t.Fatalf("nota do vídeo sem evidência temporal: %q", got)
-		}
-		if got := server.get(videoNote); !strings.Contains(got, "## Capítulos") ||
-			!strings.Contains(got, "[00:01:02.120](<"+canonical+"&t=62s>) Checkpoints") {
-			t.Fatalf("nota sem navegação por capítulos: %q", got)
-		}
-		partial := server.get(repoLocation + location(partialID, noCaptions))
-		if !strings.Contains(partial, "Nenhuma legenda compatível disponível.") ||
-			server.get("/repos/owner/vault/contents/Fontes/Vídeos/"+partialID+".md") != "" {
-			t.Fatalf("esperava apenas a captura parcial para revisão: %s", partial)
-		}
-		server.set(inbox, "- "+canonical+"\n  - Foco: checkpoint\n")
-		if err := app.Cycle(ctx, true, true); err != nil {
-			t.Fatal(err)
-		}
-		assertStates(t, db, "COMPLETED,COMPLETED,NEEDS_REVIEW,COMPLETED,NEEDS_REVIEW,COMPLETED")
-		if got := videoCaptures.Load(); got != 2 {
-			t.Fatalf("o novo foco deveria reutilizar a legenda, capturas = %d", got)
-		}
-		if got := server.get(videoNote); !strings.Contains(got, "Foco: checkpoint") {
-			t.Fatalf("nota do vídeo sem o novo foco: %q", got)
+		cycleVideos := func(poll bool) {
+			t.Helper()
+			if err := app.Cycle(ctx, poll, true); err != nil {
+				t.Fatal(err)
+			}
 		}
 
-		var transcriptions atomic.Int32
-		app.transcribeVideo = func(_ context.Context, doc video.Capture) (video.Transcript, error) {
-			transcriptions.Add(1)
-			if doc.URL != noCaptions || doc.Duration != 132 {
-				t.Errorf("metadados reutilizados na transcrição: %+v", doc)
+		seedLegacy(canonical, "COMPLETED", "")
+		oldPath := path.Join("sources", sourceID(canonical), fingerprint("youtube-capture-v1", video.CaptionVersion, canonical), "source-content.json")
+		oldMetadata := newVideoMetadata(sourceID(canonical), video.Capture{URL: canonical, Title: "Captura anterior"}, time.Now())
+		oldCapture := captionFallbackSource(oldMetadata, video.CaptionTrack{Language: "pt", Segments: []video.Segment{
+			{StartMS: 0, DurationMS: 1000, Text: "Legenda histórica."},
+		}}, time.Now())
+		oldCapture.Capture.CaptionsFallback = false
+		oldBytes, err := encodeArtifact(oldCapture)
+		if err != nil {
+			t.Fatal(err)
+		}
+		server.set(repoLocation+oldPath, string(oldBytes))
+
+		var metadataReads, captionsRead, audioRuns, longAudioRuns atomic.Int32
+		app.discoverVideo = func(_ context.Context, url string) (video.Capture, error) {
+			metadataReads.Add(1)
+			return video.Capture{URL: url, Title: "Vídeo de teste", Duration: 1300,
+				Chapters: []video.Chapter{
+					{Title: "Introdução", StartMS: 0, EndMS: 1221200},
+					{Title: "Checkpoints", StartMS: 1221200, EndMS: 1300000},
+				},
+				CaptionsStatus: video.CaptionsAvailable,
+				Captions:       &video.CaptionTrack{Language: "pt", Segments: []video.Segment{{Text: "Legenda da plataforma."}}},
+			}, nil
+		}
+		app.readCaptions = func(_ context.Context, url string) (video.Capture, error) {
+			captionsRead.Add(1)
+			if url != fallback {
+				t.Errorf("consultou legendas sem falha definitiva na obtenção do áudio: %s", url)
 			}
-			return video.Transcript{Language: "pt", Segments: []video.Segment{
-				{StartMS: 330, DurationMS: 1400, Text: "Trecho transcrito."},
+			return video.Capture{URL: url, CaptionsStatus: video.CaptionsAvailable, Captions: &video.CaptionTrack{
+				Language: "pt", Segments: []video.Segment{{StartMS: 0, DurationMS: 2500, Text: "Legenda de fallback."}},
 			}}, nil
 		}
+		app.transcriberVersion = "whisper.cpp-test"
+		app.transcribeVideo = func(_ context.Context, doc video.Capture) (video.Transcript, error) {
+			audioRuns.Add(1)
+			switch doc.URL {
+			case fallback:
+				return video.Transcript{}, video.ErrAudioUnavailable
+			case restricted:
+				return video.Transcript{}, video.ErrAudioAccess
+			case canonical:
+				if longAudioRuns.Add(1) == 1 {
+					return video.Transcript{}, video.ErrMoreAudio
+				}
+			}
+			if doc.Duration <= 1200 {
+				t.Errorf("o teste precisa exercitar fonte acima de 20 minutos: %v", doc.Duration)
+			}
+			segments := []video.Segment{{StartMS: 0, DurationMS: 1250, Text: "Abertura transcrita."}}
+			if doc.URL == canonical {
+				for i := int64(2); i < 1100; i++ {
+					segments = append(segments, video.Segment{
+						StartMS: i * 1100, DurationMS: 1000, Text: strings.Repeat("Exemplo de trecho longo. ", 30),
+					})
+				}
+			}
+			segments = append(segments, video.Segment{StartMS: 1221200, DurationMS: 3000, Text: "Checkpoint de áudio."})
+			return video.Transcript{Language: "pt", Model: "teste", ModelSHA: digest([]byte("modelo")),
+				Audio: &video.AudioEvidence{File: "youtube/original.webm", SHA256: digest([]byte("áudio")),
+					Size: 42, StartMS: 0, EndMS: 1300000, Parts: 5}, Segments: segments}, nil
+		}
+
+		server.set(inbox, "- https://youtu.be/abcdefghijk?si=share\n- "+canonical+"&t=10s&list=ignored\n- "+fallback+"\n- "+restricted+"\n")
+		cycleVideos(true)
+		assertVideoState(canonical, "", "COMPLETED")
+		assertVideoState(fallback, "", "COMPLETED")
+		assertVideoState(restricted, "", "ACCESS_REQUIRED")
+		if metadataReads.Load() != 3 || audioRuns.Load() != 4 || captionsRead.Load() != 1 || longAudioRuns.Load() != 2 {
+			t.Fatalf("chamadas inesperadas: metadados=%d, áudio=%d, legendas=%d, longo=%d", metadataReads.Load(), audioRuns.Load(), captionsRead.Load(), longAudioRuns.Load())
+		}
+		if server.get(repoLocation+oldPath) != string(oldBytes) {
+			t.Fatal("o checkpoint histórico de legenda foi alterado")
+		}
+		if got := server.get(notePath(restricted)); got != "" {
+			t.Fatalf("fonte restrita publicou nota: %q", got)
+		}
+		if got := server.get(notePath(fallback)); !strings.Contains(got, "Fallback de legendas") {
+			t.Fatalf("nota não declarou o fallback: %q", got)
+		}
+		metadataBytes := server.get(repoLocation + metadataPath(canonical))
+		audioPath := path.Join("sources", sourceID(canonical), fingerprint(videoAudioVersion, app.transcriberVersion, digest([]byte(metadataBytes))), "source-content.json")
+		checkpoint := server.get(repoLocation + audioPath)
+		var saved sourceContent
+		if err := json.Unmarshal([]byte(checkpoint), &saved); err != nil || saved.Source.URL != canonical ||
+			saved.Capture.Method != "whisper.cpp" || saved.Capture.Audio == nil || saved.Capture.Audio.EndMS != 1300000 ||
+			len(saved.TranscriptParts) < 2 || len(saved.Blocks) != 0 || len(saved.Source.Chapters) != 2 {
+			t.Fatalf("captura longa inválida: %s (%v)", checkpoint, err)
+		}
+		for _, ref := range saved.TranscriptParts {
+			if data := server.get(repoLocation + ref.Path); len(data) != ref.Size || digest([]byte(data)) != ref.SHA256 {
+				t.Fatalf("parte de transcrição não verificável: %+v", ref)
+			}
+		}
+		manifestPath := path.Join("sources", sourceID(canonical), fingerprint(videoConsolidationVersion, digest([]byte(checkpoint)), ""), "manifest.json")
+		var savedManifest manifest
+		if err := json.Unmarshal([]byte(server.get(repoLocation+manifestPath)), &savedManifest); err != nil ||
+			len(savedManifest.Artifacts) != 2 || savedManifest.Artifacts[0].SHA256 != digest([]byte(checkpoint)) ||
+			len(savedManifest.Artifacts[0].Dependencies) != 1+len(saved.TranscriptParts) {
+			t.Fatalf("manifesto de vídeo não referencia a transcrição: %+v (%v)", savedManifest, err)
+		}
+		if got := server.get(notePath(canonical)); !strings.Contains(got, "Trechos da transcrição") ||
+			!strings.Contains(got, "[00:20:21.200](<"+canonical+"&t=1221s>) Checkpoints") {
+			t.Fatalf("nota sem origem ou capítulos: %q", got)
+		}
+
+		server.set(inbox, "- "+canonical+"\n  - Foco: checkpoint\n")
+		cycleVideos(true)
+		assertVideoState(canonical, "Foco: checkpoint", "COMPLETED")
+		if got := server.get(notePath(canonical)); !strings.Contains(got, "00:20:21.200–00:20:24.200") ||
+			!strings.Contains(got, "Foco: checkpoint") || metadataReads.Load() != 3 || audioRuns.Load() != 4 || captionsRead.Load() != 1 {
+			t.Fatalf("o novo foco não reutilizou integralmente a transcrição: %q", got)
+		}
+
+		seedLegacy(legacyReview, "NEEDS_REVIEW", "revisão necessária: áudio indisponível para transcrição local: a duração precisa estar entre 0 e 20 minutos")
 		for _, retry := range []struct {
 			url   string
 			count int
 		}{
 			{canonical, 0},
-			{"https://youtu.be/12345678901?si=retry", 1},
-			{noCaptions, 0},
+			{"https://youtu.be/09876543210", 1},
+			{legacyReview, 0},
 		} {
 			count, err := RetryVideo(ctx, dsn, retry.url)
 			if err != nil || count != retry.count {
 				t.Fatalf("RetryVideo(%q) = %d, %v, esperava %d", retry.url, count, err, retry.count)
 			}
 		}
-		if err := app.Cycle(ctx, false, true); err != nil {
-			t.Fatal(err)
-		}
-		assertStates(t, db, "COMPLETED,COMPLETED,NEEDS_REVIEW,COMPLETED,COMPLETED,COMPLETED")
-		retryNote := "/repos/owner/vault/contents/Fontes/Vídeos/" + partialID + ".md"
-		if got := server.get(retryNote); !strings.Contains(got, "Trechos da transcrição") ||
-			!strings.Contains(got, "00:00:00.330–00:00:01.730") {
-			t.Fatalf("nota sem transcrição temporal: %q", got)
-		}
-		if capture := server.get(repoLocation + location(partialID, noCaptions)); capture != partial {
-			t.Fatal("a retomada alterou o checkpoint original")
-		}
-		server.set(inbox, "- "+noCaptions+"\n  - Foco: trecho\n")
-		if err := app.Cycle(ctx, true, true); err != nil {
-			t.Fatal(err)
-		}
-		if videoCaptures.Load() != 2 || transcriptions.Load() != 1 {
-			t.Fatalf("a retomada ou o novo foco repetiu extração: capturas %d, transcrições %d", videoCaptures.Load(), transcriptions.Load())
+		cycleVideos(false)
+		assertVideoState(legacyReview, "", "COMPLETED")
+		if got := server.get(notePath(legacyReview)); !strings.Contains(got, "Trechos da transcrição") {
+			t.Fatalf("faltou a transcrição do vídeo barrado pela política anterior: %q", got)
 		}
 	})
 }
