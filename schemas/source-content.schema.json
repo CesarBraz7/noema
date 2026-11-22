@@ -18,6 +18,7 @@
         "publishedAt": { "type": "string", "format": "date" },
         "capturedAt": { "type": "string", "format": "date-time" },
         "durationSeconds": { "type": "number", "minimum": 0 },
+        "availability": { "type": "string" },
         "chapters": {
           "type": "array",
           "items": {

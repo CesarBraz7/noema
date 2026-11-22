@@ -17,6 +17,8 @@ services:
       - NOEMA_ASR_CHUNK_DURATION
       - NOEMA_VIDEO_ATTEMPT_TIMEOUT
       - NOEMA_WHISPER_MODEL
+      - GEMINI_API_KEY
+      - NOEMA_GEMINI_MODEL
     volumes:
       - type: bind
         source: ${NOEMA_WORK_HOST_DIR:-../data}

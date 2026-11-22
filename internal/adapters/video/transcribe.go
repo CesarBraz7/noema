@@ -12,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/CesarBraz7/noema/internal/storage/local"
 )
 
 const (
@@ -117,7 +119,7 @@ func (t *Transcriber) Transcribe(ctx context.Context, capture Capture) (Transcri
 		if err != nil && !errors.Is(err, ErrNoSpeech) {
 			return Transcript{}, err
 		}
-		if err := writeCheckpoint(file, chunk); err != nil {
+		if err := local.PutJSON(file, chunk); err != nil {
 			return Transcript{}, err
 		}
 		if i+1 < len(parts) {

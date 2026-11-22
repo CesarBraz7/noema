@@ -20,8 +20,9 @@ import (
 
 var youtubeID = regexp.MustCompile("^[A-Za-z0-9_-]{11}$")
 
-const MetadataVersion = "yt-dlp-metadata-v1"
+const MetadataVersion = "yt-dlp-metadata-v2"
 const CaptionVersion = "yt-dlp-json3-v1"
+const PublicAvailability = "public"
 
 const watchURL = "https://www.youtube.com/watch?v="
 
@@ -38,6 +39,7 @@ type Capture struct {
 	Channel        string        `json:"channel,omitempty"`
 	Duration       float64       `json:"durationSeconds,omitempty"`
 	PublishedAt    string        `json:"publishedAt,omitempty"`
+	Availability   string        `json:"availability,omitempty"`
 	Chapters       []Chapter     `json:"chapters,omitempty"`
 	CaptionsStatus string        `json:"captionsStatus,omitempty"`
 	Captions       *CaptionTrack `json:"captions,omitempty"`
@@ -73,6 +75,7 @@ type metadata struct {
 	Uploader          string                      `json:"uploader"`
 	UploadDate        string                      `json:"upload_date"`
 	Duration          float64                     `json:"duration"`
+	Availability      string                      `json:"availability"`
 	Language          string                      `json:"language"`
 	Chapters          []chapterMetadata           `json:"chapters"`
 	Subtitles         map[string][]subtitleFormat `json:"subtitles"`
@@ -108,7 +111,7 @@ func inspect(ctx context.Context, raw string, readCaptions bool) (Capture, error
 		return Capture{}, fmt.Errorf("preparar diretório temporário para yt-dlp: %w", err)
 	}
 	defer os.RemoveAll(cache)
-	fields := "id,title,channel,uploader,upload_date,duration,chapters"
+	fields := "id,title,channel,uploader,upload_date,duration,availability,chapters"
 	if readCaptions {
 		fields += ",language,subtitles,automatic_captions"
 	}
@@ -134,7 +137,7 @@ func inspect(ctx context.Context, raw string, readCaptions bool) (Capture, error
 		return Capture{}, errors.New("yt-dlp retornou metadados incompletos do vídeo")
 	}
 	capture := Capture{
-		ID: id, URL: canonical, Title: meta.Title, Channel: meta.Channel, Duration: meta.Duration,
+		ID: id, URL: canonical, Title: meta.Title, Channel: meta.Channel, Duration: meta.Duration, Availability: meta.Availability,
 		Chapters: timedChapters(meta.Chapters),
 	}
 	if capture.Channel == "" {

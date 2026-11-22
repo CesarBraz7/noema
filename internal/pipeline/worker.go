@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/CesarBraz7/noema/internal/adapters/article"
+	"github.com/CesarBraz7/noema/internal/adapters/gemini"
 	"github.com/CesarBraz7/noema/internal/adapters/video"
 	"github.com/CesarBraz7/noema/internal/storage/github"
 	"github.com/CesarBraz7/noema/schemas"
@@ -33,17 +34,19 @@ const missingCaptionsReview = "vídeo sem legenda disponível; metadados salvos 
 const missingASRReview = "modelo de ASR local indisponível; metadados salvos em "
 
 type ingestionJob struct {
-	RequestID  int64 `json:"requestId"`
-	Transcribe bool  `json:"transcribe,omitempty"`
+	RequestID     int64  `json:"requestId"`
+	Transcribe    bool   `json:"transcribe,omitempty"`
+	VisualVersion string `json:"visualVersion,omitempty"`
 }
 
 func (ingestionJob) Kind() string { return "noema_article" }
 
 type request struct {
-	id       int64
-	sourceID string
-	url      string
-	focus    string
+	id            int64
+	sourceID      string
+	url           string
+	focus         string
+	visualVersion string
 }
 
 func (r request) isVideo() bool {
@@ -64,6 +67,7 @@ type ingestionWorker struct {
 	readCaptions       func(context.Context, string) (video.Capture, error)
 	transcribeVideo    func(context.Context, video.Capture) (video.Transcript, error)
 	transcriberVersion string
+	visual             *visualStage
 	videoAttempt       time.Duration
 	validator          schemas.Validator
 }
@@ -84,7 +88,7 @@ func (w *ingestionWorker) Timeout(job *river.Job[ingestionJob]) time.Duration {
 }
 
 func (w *ingestionWorker) Work(ctx context.Context, job *river.Job[ingestionJob]) error {
-	req := request{id: job.Args.RequestID}
+	req := request{id: job.Args.RequestID, visualVersion: job.Args.VisualVersion}
 	var state string
 	err := w.db.QueryRow(ctx, `
 		SELECT r.source_id, s.canonical_url, r.focus, r.state
@@ -111,6 +115,17 @@ func (w *ingestionWorker) Work(ctx context.Context, job *river.Job[ingestionJob]
 				return stateErr
 			}
 			return river.JobSnooze(0)
+		}
+		var quota *gemini.QuotaError
+		if errors.As(err, &quota) {
+			if stateErr := w.state(statusCtx, req.id, "WAITING_QUOTA", err.Error()); stateErr != nil {
+				return stateErr
+			}
+			delay := quota.After
+			if delay <= 0 {
+				delay = retryInterval
+			}
+			return river.JobSnooze(delay)
 		}
 		state, permanent := "RETRY_SCHEDULED", false
 		switch {
@@ -161,21 +176,45 @@ func (w *ingestionWorker) process(ctx context.Context, req request) error {
 	if err != nil {
 		return err
 	}
+	var visual visualRecord
+	var visualSkipped bool
+	inputs := []artifact{captureRef}
+	dependencies := []string{captureRef.SHA256}
+	if req.isVideo() && req.visualVersion != "" {
+		consolidationKind = videoVisualConsolidationVersion
+		if source.Source.Availability != video.PublicAvailability {
+			visualSkipped = true
+		} else {
+			record, ref, err := w.captureVisual(ctx, req, source, captureRef, root)
+			if err != nil {
+				return err
+			}
+			visual = record
+			inputs = append(inputs, ref)
+			dependencies = append(dependencies, ref.SHA256)
+		}
+	}
 	if err := w.state(ctx, req.id, "CONSOLIDATING", ""); err != nil {
 		return err
 	}
 	knowledge := consolidate(source, req.focus)
-	key := fingerprint(consolidationKind, captureRef.SHA256, req.focus)
+	if len(inputs) == 2 {
+		knowledge.addVisual(visual, inputs[1])
+	} else if visualSkipped {
+		knowledge.Coverage.Unresolved = append(knowledge.Coverage.Unresolved, "A análise externa requer visibilidade pública confirmada pelo YouTube.")
+	}
+	keyParts := append([]string{consolidationKind}, dependencies...)
+	key := fingerprint(append(keyParts, req.focus)...)
 	knowledgePath := path.Join(root, key, "knowledge.json")
-	knowledgeRef, err := w.putArtifact(ctx, req.sourceID, schemas.Knowledge, knowledgePath, knowledge, []string{captureRef.SHA256})
+	knowledgeRef, err := w.putArtifact(ctx, req.sourceID, schemas.Knowledge, knowledgePath, knowledge, dependencies)
 	if err != nil {
 		return err
 	}
 	manifestPath := path.Join(root, key, "manifest.json")
 	if _, err := w.putArtifact(ctx, req.sourceID, schemas.Manifest, manifestPath, manifest{
 		SchemaVersion: schemaVersion, SourceID: req.sourceID, Fingerprint: key, PipelineVersion: consolidationKind,
-		ExtractorVersion: extractorVersion, Artifacts: []artifact{captureRef, knowledgeRef},
-	}, []string{captureRef.SHA256, knowledgeRef.SHA256}); err != nil {
+		ExtractorVersion: extractorVersion, Artifacts: append(inputs, knowledgeRef),
+	}, append(dependencies, knowledgeRef.SHA256)); err != nil {
 		return err
 	}
 	if err := w.state(ctx, req.id, "PUBLISHING", ""); err != nil {

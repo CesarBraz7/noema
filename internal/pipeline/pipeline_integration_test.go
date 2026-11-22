@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/CesarBraz7/noema/internal/adapters/article"
+	"github.com/CesarBraz7/noema/internal/adapters/gemini"
 	"github.com/CesarBraz7/noema/internal/adapters/video"
 	"github.com/CesarBraz7/noema/internal/storage/github"
 	"github.com/CesarBraz7/noema/schemas"
@@ -22,6 +24,7 @@ import (
 )
 
 func TestArticleFlow(t *testing.T) {
+	t.Setenv("NOEMA_GEMINI_MODEL", "")
 	dsn := os.Getenv("NOEMA_INTEGRATION_DATABASE_URL")
 	if dsn == "" {
 		t.Skip("defina NOEMA_INTEGRATION_DATABASE_URL com um banco de teste vazio")
@@ -160,7 +163,7 @@ func TestArticleFlow(t *testing.T) {
 			t.Helper()
 			var got string
 			err := db.QueryRow(ctx, "SELECT state FROM noema_ingestion_requests WHERE fingerprint = $1",
-				requestFingerprint(sourceID(url), focus)).Scan(&got)
+				requestFingerprint(sourceID(url), focus, "")).Scan(&got)
 			if err != nil || got != want {
 				t.Fatalf("estado do vídeo %q com foco %q = %q, esperado %q (%v)", url, focus, got, want, err)
 			}
@@ -198,7 +201,7 @@ func TestArticleFlow(t *testing.T) {
 		var metadataReads, captionsRead, audioRuns, longAudioRuns atomic.Int32
 		app.discoverVideo = func(_ context.Context, url string) (video.Capture, error) {
 			metadataReads.Add(1)
-			return video.Capture{URL: url, Title: "Vídeo de teste", Duration: 1300,
+			return video.Capture{URL: url, Title: "Vídeo de teste", Duration: 1300, Availability: video.PublicAvailability,
 				Chapters: []video.Chapter{
 					{Title: "Introdução", StartMS: 0, EndMS: 1221200},
 					{Title: "Checkpoints", StartMS: 1221200, EndMS: 1300000},
@@ -334,6 +337,117 @@ func TestArticleFlow(t *testing.T) {
 		if got := server.get(vaultContent + pendingNote); !strings.Contains(got, "Trechos da transcrição") || server.get(notePath(interrupted)) != "" {
 			t.Fatalf("a publicação interrompida deve retomar no mesmo caminho: %q", got)
 		}
+
+		t.Run("Gemini", func(t *testing.T) {
+			var calls atomic.Int32
+			audioBefore := audioRuns.Load()
+			start, end, frame := int64(1221200), int64(1223500), int64(1221800)
+			app.visual = &visualStage{
+				model: "gemini-test", workDir: t.TempDir(),
+				client: visualAnalyzerFunc(func(_ context.Context, url string, durationMS int64) (gemini.Result, error) {
+					if url != canonical || durationMS != 1300000 {
+						t.Errorf("entrada de análise visual inesperada: %s, %d ms", url, durationMS)
+					}
+					if calls.Add(1) == 1 {
+						return gemini.Result{}, &gemini.QuotaError{After: 11 * time.Minute}
+					}
+					return gemini.Result{
+						Model: "gemini-reported", InteractionID: "gemini-test-id", Usage: &gemini.Usage{InputTokens: 8, OutputTokens: 4, TotalTokens: 12},
+						Analysis: gemini.Analysis{
+							Observations: []gemini.Observation{{Kind: "code", StartMS: &start, EndMS: &end, Description: "Código do checkpoint em tela.", VisibleText: "save(part)"}},
+							FrameChecks:  []gemini.FrameCheck{{AtMS: &frame, Reason: "A linha seguinte está pequena."}},
+							Limitations:  []string{"Parte da tabela ficou ilegível."},
+						},
+					}, nil
+				}),
+			}
+			assertState := func(url, focus, want string) int64 {
+				t.Helper()
+				var id int64
+				var state string
+				err := db.QueryRow(ctx, "SELECT id, state FROM noema_ingestion_requests WHERE fingerprint = $1",
+					requestFingerprint(sourceID(url), focus, app.visual.version())).Scan(&id, &state)
+				if err != nil || state != want {
+					t.Fatalf("estado do pedido multimodal = %q, esperado %q (%v)", state, want, err)
+				}
+				return id
+			}
+			due := func(id int64, state string) {
+				t.Helper()
+				tag, err := db.Exec(ctx, `
+					UPDATE river_job SET scheduled_at = now() - interval '1 second'
+					WHERE args->>'requestId' = $1 AND state::text = $2`, fmt.Sprint(id), state)
+				if err != nil || tag.RowsAffected() != 1 {
+					t.Fatalf("job %d não ficou pronto para a retomada: %v", id, err)
+				}
+			}
+
+			server.set(inbox, "- "+canonical+"\n")
+			cycleVideos(true)
+			visualID := assertState(canonical, "", "WAITING_QUOTA")
+			var scheduledAt time.Time
+			if err := db.QueryRow(ctx, `SELECT scheduled_at FROM river_job WHERE args->>'requestId' = $1`, fmt.Sprint(visualID)).Scan(&scheduledAt); err != nil ||
+				time.Until(scheduledAt) < 10*time.Minute {
+				t.Fatalf("atraso por cota = %v (%v)", scheduledAt, err)
+			}
+			if strings.Contains(server.get(notePath(canonical)), "Evidências visuais") {
+				t.Fatal("nota foi alterada antes da análise")
+			}
+			due(visualID, "scheduled")
+			server.failWriteOnce("video-visual.json")
+			cycleVideos(false)
+			assertState(canonical, "", "RETRY_SCHEDULED")
+			due(visualID, "retryable")
+			cycleVideos(false)
+			assertState(canonical, "", "COMPLETED")
+			if calls.Load() != 2 {
+				t.Fatalf("a falha de publicação repetiu a chamada visual: %d", calls.Load())
+			}
+
+			visualPath := path.Join("sources", sourceID(canonical), fingerprint(app.visual.version(), digest([]byte(metadataBytes)), "1300000"), "video-visual.json")
+			visualJSON := server.get(repoLocation + visualPath)
+			var record visualRecord
+			if err := json.Unmarshal([]byte(visualJSON), &record); err != nil || record.Response.Model != "gemini-reported" ||
+				record.Mode != "youtube-url" || record.Response.Usage == nil || record.Response.Usage.InputTokens != 8 ||
+				len(record.Response.Observations) != 1 || record.Response.Observations[0].ID != "v-001" {
+				t.Fatalf("evidência visual inválida: %s (%v)", visualJSON, err)
+			}
+			visualHash := digest([]byte(visualJSON))
+			newKey := fingerprint(videoVisualConsolidationVersion, digest([]byte(checkpoint)), visualHash, "")
+			outputRoot := repoLocation + path.Join("sources", sourceID(canonical), newKey)
+			var combined knowledge
+			if err := json.Unmarshal([]byte(server.get(outputRoot+"/knowledge.json")), &combined); err != nil ||
+				combined.Visual == nil || combined.Visual.SHA256 != visualHash || combined.Visual.Path != visualPath {
+				t.Fatalf("knowledge.json não referencia a análise: %+v (%v)", combined.Visual, err)
+			}
+			if err := json.Unmarshal([]byte(server.get(outputRoot+"/manifest.json")), &savedManifest); err != nil ||
+				len(savedManifest.Artifacts) != 3 || savedManifest.Artifacts[1].SHA256 != visualHash ||
+				len(savedManifest.Artifacts[2].Dependencies) != 2 {
+				t.Fatalf("manifesto sem análise e dependências: %+v (%v)", savedManifest, err)
+			}
+			if got := server.get(notePath(canonical)); !strings.Contains(got, "Código do checkpoint em tela.") ||
+				!strings.Contains(got, "[00:20:21.200](<"+canonical+"&t=1221s>)") ||
+				!strings.Contains(got, "Parte da tabela ficou ilegível.") || !strings.Contains(got, "Transcrição do áudio original") ||
+				strings.Contains(got, "Imagem não foi analisada.") {
+				t.Fatalf("nota multimodal não mostra as duas modalidades e a cobertura: %q", got)
+			}
+			server.set(inbox, "- "+canonical+"\n  - Foco: evidência visual\n")
+			cycleVideos(true)
+			assertState(canonical, "Foco: evidência visual", "COMPLETED")
+			if calls.Load() != 2 || audioRuns.Load() != audioBefore {
+				t.Fatalf("o segundo foco repetiu etapas: áudio %d, Gemini %d", audioRuns.Load()-audioBefore, calls.Load())
+			}
+			const unlisted = "https://www.youtube.com/watch?v=012345abcde"
+			app.discoverVideo = func(_ context.Context, url string) (video.Capture, error) {
+				return video.Capture{URL: url, Title: "Vídeo não listado", Duration: 1300, Availability: "unlisted"}, nil
+			}
+			server.set(inbox, "- "+unlisted+"\n")
+			cycleVideos(true)
+			assertState(unlisted, "", "COMPLETED")
+			if got := server.get(notePath(unlisted)); calls.Load() != 2 || !strings.Contains(got, "visibilidade pública confirmada") {
+				t.Fatalf("vídeo sem visibilidade pública tentou análise externa: %q", got)
+			}
+		})
 	})
 }
 
@@ -368,12 +482,19 @@ func (f extractorFunc) Extract(ctx context.Context, url string) (article.Documen
 	return f(ctx, url)
 }
 
+type visualAnalyzerFunc func(context.Context, string, int64) (gemini.Result, error)
+
+func (f visualAnalyzerFunc) AnalyzeVideo(ctx context.Context, url string, durationMS int64) (gemini.Result, error) {
+	return f(ctx, url, durationMS)
+}
+
 type testGitHub struct {
 	mu                  sync.Mutex
 	files               map[string]string
 	concurrent          string
 	changedNote         string
 	loseCaptureResponse bool
+	failWriteSuffix     string
 }
 
 func (s *testGitHub) set(path, data string) {
@@ -392,6 +513,12 @@ func (s *testGitHub) editBeforeNextNoteWrite(path, data string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.concurrent, s.changedNote = path, data
+}
+
+func (s *testGitHub) failWriteOnce(suffix string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.failWriteSuffix = suffix
 }
 
 func (s *testGitHub) ServeHTTP(w http.ResponseWriter, req *http.Request) {
@@ -425,6 +552,11 @@ func (s *testGitHub) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		}
 		_ = json.NewEncoder(w).Encode(map[string]string{"sha": sha, "encoding": "base64", "content": base64.StdEncoding.EncodeToString([]byte(current))})
 	case http.MethodPut:
+		if s.failWriteSuffix != "" && strings.HasSuffix(path, s.failWriteSuffix) {
+			s.failWriteSuffix = ""
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		var payload struct{ SHA, Content string }
 		if err := json.NewDecoder(req.Body).Decode(&payload); err != nil || payload.SHA != sha {
 			w.WriteHeader(http.StatusConflict)

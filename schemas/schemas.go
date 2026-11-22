@@ -18,6 +18,7 @@ const (
 	Knowledge      = "knowledge"
 	Manifest       = "artifact-manifest"
 	TranscriptPart = "transcript-part"
+	Visual         = "video-visual"
 )
 
 type Validator map[string]*jsonschema.Schema
@@ -26,7 +27,7 @@ func New() (Validator, error) {
 	compiler := jsonschema.NewCompiler()
 	compiler.AssertFormat()
 	validator := make(Validator)
-	for _, name := range []string{Source, Knowledge, Manifest, TranscriptPart} {
+	for _, name := range []string{Source, Visual, Knowledge, Manifest, TranscriptPart} {
 		file := name + ".schema.json"
 		data, err := definitions.ReadFile(file)
 		if err != nil {

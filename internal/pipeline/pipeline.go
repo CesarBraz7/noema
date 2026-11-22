@@ -28,6 +28,9 @@ import (
 //go:embed migrations/001_article.sql
 var migration string
 
+//go:embed migrations/002_video_visual.sql
+var visualMigration string
+
 const (
 	inboxPath           = "Inbox/links.md"
 	pollInterval        = 15 * time.Minute
@@ -47,6 +50,7 @@ type App struct {
 	readCaptions       func(context.Context, string) (video.Capture, error)
 	transcribeVideo    func(context.Context, video.Capture) (video.Transcript, error)
 	transcriberVersion string
+	visual             *visualStage
 	videoAttempt       time.Duration
 	validator          schemas.Validator
 	etag               string
@@ -83,9 +87,13 @@ func FromEnv(ctx context.Context, database string) (*App, error) {
 	if err != nil {
 		return nil, err
 	}
+	visual, err := visualFromEnv()
+	if err != nil {
+		return nil, err
+	}
 	app := &App{
 		database: database, validator: validator, extractor: extractor, discoverVideo: video.Discover,
-		readCaptions: video.Inspect, videoAttempt: attempt,
+		readCaptions: video.Inspect, videoAttempt: attempt, visual: visual,
 		vault:     github.New("https://api.github.com", owner, vault, vaultToken),
 		artifacts: github.New("https://api.github.com", owner, artifacts, artifactsToken),
 	}
@@ -169,8 +177,12 @@ func Migrate(ctx context.Context, database string) error {
 		return err
 	}
 	return pgx.BeginFunc(ctx, conn, func(tx pgx.Tx) error {
-		_, err := tx.Exec(ctx, migration)
-		return err
+		for _, statement := range []string{migration, visualMigration} {
+			if _, err := tx.Exec(ctx, statement); err != nil {
+				return err
+			}
+		}
+		return nil
 	})
 }
 
@@ -204,7 +216,7 @@ func (a *App) Cycle(ctx context.Context, pollInbox, force bool) error {
 	}
 	defer db.Close()
 	if len(entries) != 0 {
-		if err := enqueue(ctx, db, entries); err != nil {
+		if err := enqueue(ctx, db, entries, a.visual.version()); err != nil {
 			return err
 		}
 		a.etag = etag
@@ -235,27 +247,27 @@ func (a *App) Run(ctx context.Context) {
 	}
 }
 
-func enqueue(ctx context.Context, db *pgxpool.Pool, entries []inbox.Entry) error {
+func enqueue(ctx context.Context, db *pgxpool.Pool, entries []inbox.Entry, visualVersion string) error {
 	client, err := river.NewClient(riverpgxv5.New(db), &river.Config{})
 	if err != nil {
 		return err
 	}
 	return pgx.BeginFunc(ctx, db, func(tx pgx.Tx) error {
 		for _, entry := range entries {
-			prefix := "web-"
+			prefix, version := "web-", ""
 			if entry.Video {
-				prefix = videoSourcePrefix
+				prefix, version = videoSourcePrefix, visualVersion
 			}
 			id := prefix + digest([]byte(entry.URL))
 			if _, err := tx.Exec(ctx, `INSERT INTO noema_sources (id, canonical_url) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`, id, entry.URL); err != nil {
 				return err
 			}
-			requestID, err := insertRequest(ctx, tx, id, entry.Focus)
+			requestID, err := insertRequest(ctx, tx, id, entry.Focus, version)
 			if err != nil {
 				return err
 			}
 			if requestID != 0 {
-				job := ingestionJob{RequestID: requestID, Transcribe: entry.Video}
+				job := ingestionJob{RequestID: requestID, Transcribe: entry.Video, VisualVersion: version}
 				if _, err := client.InsertTx(ctx, tx, job, &river.InsertOpts{Queue: queueName, MaxAttempts: 3}); err != nil {
 					return err
 				}
@@ -265,11 +277,11 @@ func enqueue(ctx context.Context, db *pgxpool.Pool, entries []inbox.Entry) error
 	})
 }
 
-func insertRequest(ctx context.Context, tx pgx.Tx, sourceID, focus string) (int64, error) {
+func insertRequest(ctx context.Context, tx pgx.Tx, sourceID, focus, visualVersion string) (int64, error) {
 	var id int64
 	err := tx.QueryRow(ctx, `
 		INSERT INTO noema_ingestion_requests (source_id, fingerprint, focus) VALUES ($1, $2, $3)
-		ON CONFLICT (fingerprint) DO NOTHING RETURNING id`, sourceID, requestFingerprint(sourceID, focus), focus).Scan(&id)
+		ON CONFLICT (fingerprint) DO NOTHING RETURNING id`, sourceID, requestFingerprint(sourceID, focus, visualVersion), focus).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, nil
 	}
@@ -307,7 +319,7 @@ func (a *App) drain(ctx context.Context, db *pgxpool.Pool) (err error) {
 			WHERE newer.kind = j.kind AND newer.queue = j.queue AND newer.id > j.id
 			AND newer.args->>'requestId' = j.args->>'requestId'
 		)
-		AND r.state IN ('PENDING', 'CAPTURING', 'CONSOLIDATING', 'PUBLISHING', 'RETRY_SCHEDULED')`, (ingestionJob{}).Kind(), queueName)
+		AND r.state IN ('PENDING', 'CAPTURING', 'ANALYZING', 'CONSOLIDATING', 'PUBLISHING', 'RETRY_SCHEDULED', 'WAITING_QUOTA')`, (ingestionJob{}).Kind(), queueName)
 	return err
 }
 
@@ -324,6 +336,7 @@ func (a *App) work(ctx context.Context, db *pgxpool.Pool) (err error) {
 		db: db, vault: a.vault, artifacts: a.artifacts, validator: a.validator,
 		extractor: a.extractor, discoverVideo: a.discoverVideo, readCaptions: a.readCaptions,
 		transcribeVideo: a.transcribeVideo, transcriberVersion: a.transcriberVersion, videoAttempt: a.videoAttempt,
+		visual: a.visual,
 	})
 	client, err := river.NewClient(riverpgxv5.New(db), &river.Config{
 		Queues: map[string]river.QueueConfig{queueName: {MaxWorkers: 1}}, Workers: workers,

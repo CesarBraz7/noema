@@ -6,7 +6,7 @@ O Noema transforma links em conhecimento rastreável no Obsidian. A ingestão co
 
 > **Fase 1.** A ingestão de artigos usa GitHub, PostgreSQL, River OSS e Trafilatura. A síntese seleciona trechos localmente, com referência ao bloco capturado e sem chamadas de IA.
 
-> **Fase 2 em andamento.** Vídeos do YouTube já passam pela extração e transcrição do áudio original. A análise visual e multimodal segue pendente. [Roadmap](docs/ROADMAP.md#fase-2--vídeos)
+> **Fase 2 em andamento.** Vídeos do YouTube passam pela extração e transcrição do áudio original. A análise visual com Gemini pode ser habilitada no worker local. [Roadmap](docs/ROADMAP.md#fase-2--vídeos)
 
 ## Repositórios
 
@@ -71,6 +71,14 @@ Para retomar um pedido em revisão por falta de legenda, ausência de ASR ou pel
 docker compose --env-file .env.local -f deploy/compose.yaml run --build --rm noema retry-video 'https://www.youtube.com/watch?v=VIDEO_ID'
 docker compose --env-file .env.local -f deploy/compose.yaml run --rm noema once
 ```
+
+## Habilitar a análise visual
+
+Use uma chave de um projeto Gemini da camada gratuita, sem faturamento. Configure `GEMINI_API_KEY` e selecione em `NOEMA_GEMINI_MODEL` um modelo gratuito compatível com vídeo, como `gemini-3.5-flash-lite`. Antes de iniciar o worker, rode `migrate` para habilitar os estados da análise e da fila de cotas. [Vídeo no Gemini](https://aistudio.google.com/docs/video-understanding#youtube) · [Modelos e preços](https://aistudio.google.com/docs/pricing)
+
+Para vídeos com visibilidade pública confirmada, o worker envia a URL canônica ao Gemini após preparar a transcrição. `video-visual.json` registra a resposta estruturada, o modelo informado pelo provedor, o uso de tokens quando fornecido, os intervalos de evidência e as lacunas. A nota reúne evidências da transcrição e da imagem com links para os timestamps. O processamento reaproveita a análise salva quando muda apenas o foco da inbox.
+
+Uma resposta HTTP 429 deixa a análise em `WAITING_QUOTA` até o prazo informado pelo provedor, ou até a próxima janela de retry. A configuração padrão usa a captura local de áudio. Quando a visibilidade pública não pode ser confirmada, o worker registra essa limitação na nota e mantém a captura local.
 
 ## Inspecionar um vídeo do YouTube
 

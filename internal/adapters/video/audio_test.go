@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/CesarBraz7/noema/internal/storage/local"
 )
 
 func TestJoinTranscriptWithVideoOffsets(t *testing.T) {
@@ -23,12 +25,12 @@ func TestJoinTranscriptWithVideoOffsets(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"000001.json", "000002.json", "000003.json"} {
-		if err := writeCheckpoint(filepath.Join(dir, name), Transcript{}); err != nil {
+		if err := local.PutJSON(filepath.Join(dir, name), Transcript{}); err != nil {
 			t.Fatal(err)
 		}
 	}
 	for _, name := range []string{"000000.json", "000004.json"} {
-		if err := writeCheckpoint(filepath.Join(dir, name), Transcript{Language: "pt",
+		if err := local.PutJSON(filepath.Join(dir, name), Transcript{Language: "pt",
 			Segments: []Segment{{StartMS: 1000, DurationMS: 90000, Text: "Texto transcrito."}},
 		}); err != nil {
 			t.Fatal(err)

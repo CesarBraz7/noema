@@ -16,6 +16,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/CesarBraz7/noema/internal/storage/local"
 )
 
 type audioSnapshot struct {
@@ -85,7 +87,7 @@ func originalAudio(ctx context.Context, dir, canonical string) (audioSnapshot, e
 		return audioSnapshot{}, err
 	}
 	audio := audioSnapshot{File: filepath.Base(file), SHA256: sha, Size: info.Size(), Modified: info.ModTime().UnixNano()}
-	if err := writeCheckpoint(index, audio); err != nil {
+	if err := local.PutJSON(index, audio); err != nil {
 		return audioSnapshot{}, err
 	}
 	return audio, nil
@@ -197,17 +199,4 @@ func fileSHA(path string) (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(hash.Sum(nil)), nil
-}
-
-func writeCheckpoint(path string, value any) error {
-	file, err := os.CreateTemp(filepath.Dir(path), ".checkpoint-")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(file.Name())
-	writeErr := json.NewEncoder(file).Encode(value)
-	if err := errors.Join(writeErr, file.Close()); err != nil {
-		return err
-	}
-	return os.Rename(file.Name(), path)
 }

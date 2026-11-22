@@ -9,6 +9,17 @@
     "title": { "type": "string", "minLength": 1 },
     "language": { "const": "pt-BR" },
     "method": { "const": "extractive" },
+    "visual": {
+      "type": "object",
+      "required": ["artifactPath", "artifactSha256", "analysisMode", "model", "observations"],
+      "properties": {
+        "artifactPath": { "type": "string", "minLength": 1 },
+        "artifactSha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "analysisMode": { "const": "youtube-url" },
+        "model": { "$ref": "video-visual.schema.json#/$defs/model" },
+        "observations": { "$ref": "video-visual.schema.json#/$defs/observations" }
+      }
+    },
     "coverage": {
       "type": "object",
       "required": ["status", "unresolved"],

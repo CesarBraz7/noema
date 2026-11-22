@@ -11,19 +11,21 @@ import (
 	"unicode"
 
 	"github.com/CesarBraz7/noema/internal/adapters/article"
+	"github.com/CesarBraz7/noema/internal/adapters/gemini"
 	"github.com/CesarBraz7/noema/internal/adapters/video"
 )
 
 const (
-	schemaVersion               = "1.0.0"
-	captureVersion              = "article-capture-v1"
-	consolidationVersion        = "article-excerpts-v1"
-	videoSourcePrefix           = "youtube-"
-	videoRequestVersion         = "youtube-audio-first-v1"
-	videoMetadataVersion        = "youtube-metadata-v1"
-	videoAudioVersion           = "youtube-audio-v2"
-	videoCaptionFallbackVersion = "youtube-caption-fallback-v1"
-	videoConsolidationVersion   = "youtube-excerpts-v2"
+	schemaVersion                   = "1.0.0"
+	captureVersion                  = "article-capture-v1"
+	consolidationVersion            = "article-excerpts-v1"
+	videoSourcePrefix               = "youtube-"
+	videoRequestVersion             = "youtube-audio-first-v1"
+	videoMetadataVersion            = "youtube-metadata-v1"
+	videoAudioVersion               = "youtube-audio-v2"
+	videoCaptionFallbackVersion     = "youtube-caption-fallback-v1"
+	videoConsolidationVersion       = "youtube-excerpts-v2"
+	videoVisualConsolidationVersion = "youtube-excerpts-visual-v1"
 )
 
 type sourceContent struct {
@@ -46,6 +48,7 @@ type metadata struct {
 	PublishedAt     string          `json:"publishedAt,omitempty"`
 	CapturedAt      time.Time       `json:"capturedAt"`
 	DurationSeconds float64         `json:"durationSeconds,omitempty"`
+	Availability    string          `json:"availability,omitempty"`
 	Chapters        []video.Chapter `json:"chapters,omitempty"`
 }
 
@@ -101,7 +104,7 @@ func newVideoMetadata(id string, doc video.Capture, now time.Time) sourceContent
 		Source: metadata{
 			URL: doc.URL, Type: "video", Platform: "youtube", Title: strings.TrimSpace(doc.Title),
 			Author: strings.TrimSpace(doc.Channel), PublishedAt: doc.PublishedAt,
-			CapturedAt: now.UTC().Truncate(time.Second), DurationSeconds: doc.Duration, Chapters: doc.Chapters,
+			CapturedAt: now.UTC().Truncate(time.Second), DurationSeconds: doc.Duration, Availability: doc.Availability, Chapters: doc.Chapters,
 		},
 		Capture: capture{Status: "partial", Method: "yt-dlp", Missing: []string{"Áudio original e imagem ainda não foram analisados."}},
 		Blocks:  []block{},
@@ -146,14 +149,44 @@ func timedBlocks(segments []video.Segment) []block {
 }
 
 type knowledge struct {
-	SchemaVersion string    `json:"schemaVersion"`
-	SourceID      string    `json:"sourceId"`
-	FocusNote     string    `json:"focusNote,omitempty"`
-	Title         string    `json:"title"`
-	Language      string    `json:"language"`
-	Method        string    `json:"method"`
-	Coverage      coverage  `json:"coverage"`
-	Insights      []insight `json:"insights"`
+	SchemaVersion string           `json:"schemaVersion"`
+	SourceID      string           `json:"sourceId"`
+	FocusNote     string           `json:"focusNote,omitempty"`
+	Title         string           `json:"title"`
+	Language      string           `json:"language"`
+	Method        string           `json:"method"`
+	Coverage      coverage         `json:"coverage"`
+	Insights      []insight        `json:"insights"`
+	Visual        *visualKnowledge `json:"visual,omitempty"`
+}
+
+type visualKnowledge struct {
+	Path         string               `json:"artifactPath"`
+	SHA256       string               `json:"artifactSha256"`
+	Mode         string               `json:"analysisMode"`
+	Model        string               `json:"model"`
+	Observations []gemini.Observation `json:"observations"`
+}
+
+func (k *knowledge) addVisual(record visualRecord, ref artifact) {
+	k.Visual = &visualKnowledge{
+		Path: ref.Path, SHA256: ref.SHA256, Mode: record.Mode, Model: record.Response.Model,
+		Observations: record.Response.Observations,
+	}
+	unresolved := k.Coverage.Unresolved[:0]
+	for _, item := range k.Coverage.Unresolved {
+		if item != "Imagem não foi analisada." && item != "A imagem não foi analisada." {
+			unresolved = append(unresolved, item)
+		}
+	}
+	unresolved = append(unresolved, "A análise visual do Gemini usa imagens amostradas ao longo do vídeo.")
+	for _, check := range record.Response.FrameChecks {
+		unresolved = append(unresolved, fmt.Sprintf("Inspeção visual em %s — %s", timestamp(*check.AtMS), check.Reason))
+	}
+	if len(record.Response.Observations) == 0 {
+		unresolved = append(unresolved, "O Gemini não retornou evidências visuais verificáveis.")
+	}
+	k.Coverage.Unresolved = append(unresolved, record.Response.Limitations...)
 }
 
 type coverage struct {
@@ -271,8 +304,11 @@ func fingerprint(parts ...string) string {
 	return digest(data)
 }
 
-func requestFingerprint(sourceID, focus string) string {
+func requestFingerprint(sourceID, focus, visualVersion string) string {
 	if strings.HasPrefix(sourceID, videoSourcePrefix) {
+		if visualVersion != "" {
+			return fingerprint(sourceID, focus, videoRequestVersion, visualVersion)
+		}
 		return fingerprint(sourceID, focus, videoRequestVersion)
 	}
 	return fingerprint(sourceID, focus)
@@ -330,6 +366,17 @@ func note(source sourceContent, knowledge knowledge, manifestPath string) []byte
 	for _, insight := range knowledge.Insights {
 		ref := insight.Evidence[0]
 		fmt.Fprintf(&body, "\n> %s\n\n%s · `%s`\n", markdown(insight.Explanation), ref.Locator, ref.SourceBlockID)
+	}
+	if knowledge.Visual != nil {
+		fmt.Fprintf(&body, "\n## Evidências visuais\n\nGemini %s · `%s`\n", markdown(knowledge.Visual.Model), knowledge.Visual.Path)
+		labels := map[string]string{"code": "Código", "slide": "Slide", "diagram": "Diagrama", "table": "Tabela", "demo": "Demonstração", "other": "Imagem"}
+		for _, item := range knowledge.Visual.Observations {
+			fmt.Fprintf(&body, "\n- [%s](<%s&t=%ds>) **%s** · `%s` · %s\n",
+				timestamp(*item.StartMS), source.Source.URL, *item.StartMS/1000, labels[item.Kind], item.ID, markdown(item.Description))
+			if item.VisibleText != "" {
+				fmt.Fprintf(&body, "  - Trecho visível — %s\n", markdown(item.VisibleText))
+			}
+		}
 	}
 	body.WriteString("\n## Limitações\n\n")
 	for _, limitation := range knowledge.Coverage.Unresolved {

@@ -9,12 +9,16 @@
     "pipelineVersion": { "type": "string", "minLength": 1 },
     "extractorVersion": { "type": "string", "minLength": 1 },
     "artifacts": {
-      "type": "array", "minItems": 2, "maxItems": 2,
+      "type": "array", "minItems": 2, "maxItems": 3,
+      "allOf": [
+        { "contains": { "properties": { "kind": { "const": "source-content" } } }, "maxContains": 1 },
+        { "contains": { "properties": { "kind": { "const": "knowledge" } } }, "maxContains": 1 }
+      ],
       "items": {
         "type": "object",
         "required": ["kind", "path", "sha256", "size", "dependencies", "validated"],
         "properties": {
-          "kind": { "enum": ["source-content", "knowledge"] },
+          "kind": { "enum": ["source-content", "knowledge", "video-visual"] },
           "path": { "type": "string", "minLength": 1 },
           "sha256": { "$ref": "#/$defs/sha256" },
           "size": { "type": "integer", "minimum": 1 },

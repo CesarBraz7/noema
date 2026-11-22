@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/CesarBraz7/noema/internal/adapters/gemini"
 	"github.com/CesarBraz7/noema/internal/adapters/video"
 	"github.com/jackc/pgx/v5"
 	"github.com/riverqueue/river"
@@ -16,6 +17,11 @@ func RetryVideo(ctx context.Context, database, rawURL string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	visual, err := visualFromEnv()
+	if err != nil {
+		return 0, err
+	}
+	visualVersion := visual.version()
 	db, err := openDB(ctx, database)
 	if err != nil {
 		return 0, err
@@ -43,6 +49,9 @@ func RetryVideo(ctx context.Context, database, rawURL string) (int, error) {
 			errReview.Error() + ": " + video.ErrAudioUnavailable.Error() + ": a duração precisa estar entre ",
 			errReview.Error() + ": " + video.ErrNoSpeech.Error(),
 			errReview.Error() + ": áudio original e legenda de fallback indisponíveis",
+			errReview.Error() + ": " + missingVisualConfigReview,
+			errReview.Error() + ": " + gemini.ErrAuthorization.Error(),
+			errReview.Error() + ": " + gemini.ErrRejected.Error(),
 		}
 		type review struct {
 			ID          int64
@@ -63,8 +72,8 @@ func RetryVideo(ctx context.Context, database, rawURL string) (int, error) {
 		}
 		for _, request := range requests {
 			id := request.ID
-			if request.Fingerprint != requestFingerprint(sourceID, request.Focus) {
-				id, err = insertRequest(ctx, tx, sourceID, request.Focus)
+			if request.Fingerprint != requestFingerprint(sourceID, request.Focus, visualVersion) {
+				id, err = insertRequest(ctx, tx, sourceID, request.Focus, visualVersion)
 				if err != nil {
 					return err
 				}
@@ -77,7 +86,7 @@ func RetryVideo(ctx context.Context, database, rawURL string) (int, error) {
 				WHERE id = $1`, id); err != nil {
 				return err
 			}
-			job := ingestionJob{RequestID: id, Transcribe: true}
+			job := ingestionJob{RequestID: id, Transcribe: true, VisualVersion: visualVersion}
 			if _, err := client.InsertTx(ctx, tx, job, &river.InsertOpts{Queue: queueName, MaxAttempts: 3}); err != nil {
 				return err
 			}
