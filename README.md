@@ -16,7 +16,7 @@ O Noema transforma links em conhecimento rastreável no Obsidian. O primeiro flu
 
 ## Arquitetura de referência
 
-- **Go** como orquestrador enxuto, rodando em Docker Compose em VM ARM64 (OCI Always Free como primeira opção);
+- **Go** como orquestrador enxuto, rodando em Docker Compose no Windows durante o desenvolvimento e compatível com hosts Linux AMD64 e ARM64;
 - **PostgreSQL externo (Neon) + River OSS** para fontes, jobs, retries e estados;
 - **Extractor First:** `yt-dlp`, `gallery-dl`, `Instaloader`, `trafilatura`, FFmpeg e navegador somente em último caso;
 - **IA multimodal por API:** Gemini, Groq e fallbacks compatíveis, priorizando níveis gratuitos;
@@ -31,6 +31,8 @@ O Noema transforma links em conhecimento rastreável no Obsidian. O primeiro flu
 - [Decisões arquiteturais (ADRs)](docs/adr/0001-base-arquitetural.md)
 
 ## Executar a Fase 1
+
+Os comandos abaixo funcionam no Windows com o Docker Desktop iniciado. O worker no contêiner se conecta ao Neon e ao GitHub.
 
 1. Após vincular o projeto com `neon init`, rode `neon deploy` para trazer as variáveis do Postgres. O CLI cria `.env.local` ou atualiza `.env` se ele já existir. O Noema prefere `DATABASE_URL_UNPOOLED` e aceita `DATABASE_URL` como alternativa para uma conexão **direta** via TLS. A conexão direta é necessária para o River e o lock de sessão do worker.
 2. No mesmo arquivo de ambiente, configure um token GitHub da conta `CesarBraz7` com `Contents: Read and write` nos dois repositórios de dados. Use `GITHUB_TOKEN` para um único token, ou `GITHUB_VAULT_TOKEN` e `GITHUB_ARTIFACTS_TOKEN` para tokens separados. Os commits da automação são atribuídos pela API do GitHub à conta autenticada.

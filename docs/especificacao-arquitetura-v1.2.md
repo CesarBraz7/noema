@@ -5,7 +5,7 @@
 
 > **Versão:** 1.2 — proposta consolidada para implementação  
 > **Data de referência:** 19 de novembro de 2026  
-> **Status:** decisões arquiteturais tomadas; implantação e integração ainda não executadas  
+> **Status:** ingestão de artigos validada no Windows. Desenvolvimento local em andamento. Hospedagem contínua a definir.\
 > **Idioma dos artefatos finais:** português brasileiro, preservando termos originais e citações quando necessário
 
 ---
@@ -14,9 +14,9 @@
 
 O projeto **Noema** é uma plataforma pessoal, automatizada e extensível de **ingestão de fontes, extração de evidências, interpretação multimodal, classificação e consolidação de conhecimento**. O objetivo não é resumir indiscriminadamente cada link, mas **transformar materiais externos em conhecimento consultável, contextualizado, rastreável e interligado no Obsidian**.
 
-O usuário salva uma URL — opcionalmente acompanhada de uma observação — em uma nota de inbox no Obsidian. Uma aplicação hospedada na nuvem identifica a entrada, obtém o conteúdo por ferramentas open source, interpreta texto/áudio/imagens conforme a fonte, produz arquivos estruturados (`source-content.json`, análises e `knowledge.json`), gera notas Markdown e publica o resultado em um vault sincronizado por Git.
+O usuário salva uma URL — opcionalmente acompanhada de uma observação — em uma nota de inbox no Obsidian. O worker identifica a entrada, obtém o conteúdo por ferramentas open source, interpreta texto/áudio/imagens conforme a fonte, produz arquivos estruturados (`source-content.json`, análises e `knowledge.json`), gera notas Markdown e publica o resultado em um vault sincronizado por Git.
 
-O projeto prioriza **custo zero quando possível**, aproveitando APIs gratuitas de IA antes de serviços pagos, e **não depende do notebook para executar os trabalhos**. Arquivos intermediários caros de produzir ficam preservados fora da máquina executora, possibilitando recuperação e reanálise seletiva.
+O projeto prioriza **custo zero quando possível**, aproveitando APIs gratuitas de IA antes de serviços pagos. O worker pode rodar no computador de desenvolvimento ou passar para outro host. Arquivos intermediários caros de produzir ficam preservados fora da máquina executora, possibilitando recuperação e reanálise seletiva.
 
 **Princípios inegociáveis:**
 
@@ -68,7 +68,7 @@ A diferença de desempenho **não acelera substancialmente o trabalho pesado**, 
 | Rotinas Python preexistentes | `yt-dlp`, `gallery-dl`, `Instaloader` quando útil, `trafilatura` |
 | Manipulação de vídeo/áudio | FFmpeg / ffprobe |
 | OCR leve opcional | Tesseract inicialmente; outros motores mediante teste |
-| Infraestrutura de execução | Oracle Cloud VM ARM64 + Docker Compose |
+| Infraestrutura de execução | Docker Compose no Windows durante o desenvolvimento, com suporte a hosts Linux AMD64 e ARM64 |
 | Artefatos textuais | GitHub privado separado do vault |
 | Binários preservados | Oracle Object Storage |
 | Editor de conhecimento | Obsidian gratuito + Git |
@@ -624,19 +624,18 @@ Usar Dockerfile multi-stage: compilar Go para `linux/arm64` (e `linux/amd64` na 
 
 `compose.yaml` deve declarar reinício automático, limites de recursos adequados, volumes, healthchecks quando úteis, variáveis de ambiente protegidas e logs com rotação. O Compose não migra dados do disco por conta própria: na troca de provedor será necessário restaurar o volume e reconectar serviços externos. Banco, repositórios e Object Storage são independentes da localização da VM.
 
-**Teste obrigatório:** build e execução no `linux/arm64` real da OCI, incluindo bibliotecas Python nativas; validar também `linux/amd64` para permitir execução local no notebook se necessário.
+Durante o desenvolvimento, validar o build e a execução no Docker Desktop. Antes da implantação contínua, repetir a validação na arquitetura do host escolhido, incluindo as bibliotecas Python nativas.
 
 ## 19. Etapas de implementação
 
 ### Fase 0 — Infraestrutura e segurança
 
 - Criar repositório privado da aplicação, repositório de artefatos e repositório do vault.
-- Provisionar VM Oracle A1 Always Free, volumes e bucket privado; confirmar cotas, acesso de rede e disponibilidade.
 - Criar projeto Neon gratuito, habilitar TLS, migrar esquemas e configurar credenciais mínimas.
 - Criar Dockerfile multi-stage e Compose com Go + extratores; publicar imagem compatível com ARM64.
 - Configurar autenticação GitHub, backups, logs e políticas de retenção.
 
-**Aceite:** VM recuperável, containers reiniciáveis, comunicação segura com banco/GitHub/Object Storage e nenhum segredo versionado.
+**Aceite:** contêiner executável e reiniciável no Docker local, comunicação segura com Neon e GitHub e nenhum segredo versionado. A validação de infraestrutura e armazenamento do provedor fica para a implantação contínua.
 
 ### Fase 1 — Inbox, fila e extração textual
 

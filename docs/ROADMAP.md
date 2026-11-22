@@ -2,10 +2,12 @@
 
 A pipeline é construída por incrementos testáveis, sem ativar cobranças por padrão.
 
+O desenvolvimento e a validação funcionam no Windows com Docker Desktop. A escolha do host e a validação de acesso, cotas e armazenamento ficam para a implantação contínua.
+
 ## Fase 0 — Base de desenvolvimento e segurança
 - Manter os três repositórios privados e documentar permissões.
 - Preparar Go, ambiente Docker ARM64/AMD64, CI e configuração por ambiente.
-- Validar provisionamento Oracle Always Free, Neon e bucket privado antes de deploy.
+- Validar a conexão com o Neon a partir do Docker local.
 - Criar contratos iniciais e ferramentas de desenvolvimento local.
 - **Aceite:** testes Go e build Docker passam; nenhum segredo versionado.
 
