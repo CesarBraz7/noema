@@ -59,7 +59,7 @@ A inbox é verificada a cada 15 minutos, com ETag. O serviço verifica a fila na
 
 A captura `source-content.json` é reutilizada quando o mesmo artigo é reenviado. Um novo foco gera `knowledge.json` e `manifest.json` próprios. O manifesto referencia o caminho e o SHA-256 da captura. A nota em `Fontes/Artigos/` aponta para o manifesto e para os blocos que sustentam cada trecho. Se a nota já tiver sido editada ou removida, o worker preserva a mudança e registra `NEEDS_REVIEW`.
 
-Para vídeos, o worker guarda os metadados e a origem do texto em `source-content.json`, com início e fim de cada trecho em milissegundos. A nota em `Fontes/Vídeos/` referencia esses intervalos. Links equivalentes reaproveitam a captura e o mesmo pedido quando o foco é igual.
+Para vídeos, o worker guarda os metadados e a origem do texto em `source-content.json`, com início e fim de cada trecho em milissegundos. Novas notas são publicadas em `Fontes/Videos/` e referenciam esses intervalos. Links equivalentes reaproveitam a captura e o mesmo pedido quando o foco é igual.
 
 O worker baixa a faixa original com yt-dlp, normaliza o áudio com FFmpeg e transcreve com Whisper local. O processamento ocorre em partes e retoma do último segmento salvo, sem teto global de duração ou tamanho do áudio. O Docker Compose mantém o áudio e os checkpoints em `data/`. Legendas entram como fallback declarado quando a faixa original estiver definitivamente indisponível. Restrições de acesso ficam registradas, e falhas temporárias entram nas tentativas do River. [Especificação auditada](docs/especificacao-arquitetura-v1.3-auditada.md#82-vídeos-três-responsabilidades-distintas)
 

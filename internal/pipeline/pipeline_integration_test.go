@@ -137,13 +137,14 @@ func TestArticleFlow(t *testing.T) {
 			restricted   = "https://www.youtube.com/watch?v=ZYXWVUTSRQP"
 			legacyReview = "https://www.youtube.com/watch?v=09876543210"
 			repoLocation = "/repos/owner/artifacts/contents/"
+			vaultContent = "/repos/owner/vault/contents/"
 		)
 		sourceID := func(url string) string { return videoSourcePrefix + digest([]byte(url)) }
 		metadataPath := func(url string) string {
 			return path.Join("sources", sourceID(url), fingerprint(videoMetadataVersion, video.MetadataVersion, url), "source-content.json")
 		}
 		notePath := func(url string) string {
-			return "/repos/owner/vault/contents/Fontes/Vídeos/" + sourceID(url) + ".md"
+			return vaultContent + "Fontes/Videos/" + sourceID(url) + ".md"
 		}
 		seedLegacy := func(url, state, reason string) {
 			t.Helper()
@@ -183,6 +184,16 @@ func TestArticleFlow(t *testing.T) {
 			t.Fatal(err)
 		}
 		server.set(repoLocation+oldPath, string(oldBytes))
+		seedLegacy(fallback, "COMPLETED", "")
+		legacyNote := "Fontes/Vídeos/" + sourceID(fallback) + ".md"
+		legacyData := "# Nota publicada antes do ajuste da pasta\n"
+		server.set(vaultContent+legacyNote, legacyData)
+		if _, err := db.Exec(ctx, `
+			INSERT INTO noema_publications (source_id, request_id, note_path, blob_sha)
+			SELECT source_id, id, $2, $3 FROM noema_ingestion_requests WHERE source_id = $1`,
+			sourceID(fallback), legacyNote, digest([]byte(legacyData))); err != nil {
+			t.Fatal(err)
+		}
 
 		var metadataReads, captionsRead, audioRuns, longAudioRuns atomic.Int32
 		app.discoverVideo = func(_ context.Context, url string) (video.Capture, error) {
@@ -249,8 +260,8 @@ func TestArticleFlow(t *testing.T) {
 		if got := server.get(notePath(restricted)); got != "" {
 			t.Fatalf("fonte restrita publicou nota: %q", got)
 		}
-		if got := server.get(notePath(fallback)); !strings.Contains(got, "Fallback de legendas") {
-			t.Fatalf("nota não declarou o fallback: %q", got)
+		if got := server.get(vaultContent + legacyNote); !strings.Contains(got, "Fallback de legendas") || server.get(notePath(fallback)) != "" {
+			t.Fatalf("nota antiga deve ser atualizada no mesmo caminho e declarar o fallback: %q", got)
 		}
 		metadataBytes := server.get(repoLocation + metadataPath(canonical))
 		audioPath := path.Join("sources", sourceID(canonical), fingerprint(videoAudioVersion, app.transcriberVersion, digest([]byte(metadataBytes))), "source-content.json")
@@ -304,6 +315,24 @@ func TestArticleFlow(t *testing.T) {
 		assertVideoState(legacyReview, "", "COMPLETED")
 		if got := server.get(notePath(legacyReview)); !strings.Contains(got, "Trechos da transcrição") {
 			t.Fatalf("faltou a transcrição do vídeo barrado pela política anterior: %q", got)
+		}
+
+		const interrupted = "https://www.youtube.com/watch?v=lkjihgfedcb"
+		seedLegacy(interrupted, "PUBLISHING", "")
+		pendingNote := "Fontes/Vídeos/" + sourceID(interrupted) + ".md"
+		pendingData := "# Nota gravada antes da confirmação do worker\n"
+		server.set(vaultContent+pendingNote, pendingData)
+		if _, err := db.Exec(ctx, `
+			INSERT INTO noema_publication_intents (request_id, note_path, sha256)
+			SELECT id, $2, $3 FROM noema_ingestion_requests WHERE source_id = $1`,
+			sourceID(interrupted), pendingNote, digest([]byte(pendingData))); err != nil {
+			t.Fatal(err)
+		}
+		server.set(inbox, "- "+interrupted+"\n")
+		cycleVideos(true)
+		assertVideoState(interrupted, "", "COMPLETED")
+		if got := server.get(vaultContent + pendingNote); !strings.Contains(got, "Trechos da transcrição") || server.get(notePath(interrupted)) != "" {
+			t.Fatalf("a publicação interrompida deve retomar no mesmo caminho: %q", got)
 		}
 	})
 }

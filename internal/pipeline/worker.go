@@ -146,7 +146,7 @@ func (w *ingestionWorker) process(ctx context.Context, req request) error {
 	extractorVersion := article.Version
 	consolidationKind, noteFolder := consolidationVersion, "Artigos"
 	if req.isVideo() {
-		consolidationKind, noteFolder = videoConsolidationVersion, "Vídeos"
+		consolidationKind, noteFolder = videoConsolidationVersion, "Videos"
 		source, captureRef, extractorVersion, err = w.captureVideo(ctx, req, root)
 	} else {
 		capturePath := path.Join(root, fingerprint(captureVersion, extractorVersion, req.url), "source-content.json")
@@ -334,13 +334,28 @@ func (w *ingestionWorker) state(ctx context.Context, id int64, state, message st
 
 func (w *ingestionWorker) publish(ctx context.Context, req request, location string, data []byte) error {
 	var lastRequest int64
-	var lastSHA string
-	err := w.db.QueryRow(ctx, `SELECT request_id, blob_sha FROM noema_publications WHERE source_id = $1`, req.sourceID).Scan(&lastRequest, &lastSHA)
+	var lastPath, lastSHA string
+	err := w.db.QueryRow(ctx, `SELECT request_id, note_path, blob_sha FROM noema_publications WHERE source_id = $1`, req.sourceID).Scan(&lastRequest, &lastPath, &lastSHA)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
 	if lastRequest > req.id {
 		return nil // A more recent focus already owns the note.
+	}
+	if req.isVideo() {
+		legacyPath := path.Join("Fontes", "Vídeos", path.Base(location))
+		useLegacy := lastPath == legacyPath
+		if lastRequest == 0 {
+			// An older worker might have committed the note before recording the publication.
+			if err := w.db.QueryRow(ctx, `SELECT EXISTS (
+				SELECT 1 FROM noema_publication_intents WHERE note_path = $1 AND request_id <= $2
+			)`, legacyPath, req.id).Scan(&useLegacy); err != nil {
+				return err
+			}
+		}
+		if useLegacy {
+			location = legacyPath
+		}
 	}
 	file, err := w.vault.Get(ctx, location, "")
 	if err != nil {
