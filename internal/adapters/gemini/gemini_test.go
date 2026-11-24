@@ -56,8 +56,14 @@ func TestAnalyzeVideo(t *testing.T) {
 		len(result.Observations) != 2 || *result.Observations[0].StartMS != 0 || len(result.FrameChecks) != 1 {
 		t.Fatalf("resultado = %+v, erro = %v", result, err)
 	}
-	if _, err := client.AnalyzeVideo(context.Background(), testURL, 12000); !errors.Is(err, ErrInvalidResponse) {
-		t.Fatalf("timestamp fora da fonte passou na validação: %v", err)
+	clipped, err := client.AnalyzeVideo(context.Background(), testURL, 12000)
+	if err != nil || len(clipped.Observations) != 1 || *clipped.Observations[0].EndMS != 10000 ||
+		len(clipped.FrameChecks) != 0 || clipped.TimelineExclusions == nil ||
+		*clipped.TimelineExclusions != (TimelineExclusions{Observations: 1, FrameChecks: 1}) {
+		t.Fatalf("evidências fora da duração não foram descartadas e registradas: %+v (%v)", clipped, err)
+	}
+	if _, err := client.AnalyzeVideo(context.Background(), testURL, 9000); !errors.Is(err, ErrInvalidResponse) {
+		t.Fatalf("resposta sem nenhuma evidência dentro da duração foi aceita: %v", err)
 	}
 	if _, err := client.AnalyzeVideo(context.Background(), "https://example.org/video", 20000); !errors.Is(err, ErrRejected) {
 		t.Fatalf("origem alheia ao YouTube não foi rejeitada: %v", err)

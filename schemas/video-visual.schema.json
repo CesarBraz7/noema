@@ -25,6 +25,14 @@
       "properties": {
         "model": { "$ref": "#/$defs/model" },
         "interactionId": { "type": "string", "minLength": 1, "maxLength": 512 },
+        "timelineExclusions": {
+          "type": "object",
+          "required": ["observations", "frameChecks"],
+          "properties": {
+            "observations": { "type": "integer", "minimum": 0, "maximum": 24 },
+            "frameChecks": { "type": "integer", "minimum": 0, "maximum": 4 }
+          }
+        },
         "usage": {
           "type": "object",
           "required": ["total_input_tokens", "total_output_tokens", "total_thought_tokens", "total_tokens"],

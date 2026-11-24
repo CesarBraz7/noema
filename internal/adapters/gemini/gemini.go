@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"regexp"
 	"slices"
@@ -84,10 +85,16 @@ type Usage struct {
 }
 
 type Result struct {
-	Model         string `json:"model"`
-	InteractionID string `json:"interactionId,omitempty"`
-	Usage         *Usage `json:"usage,omitempty"`
+	Model              string              `json:"model"`
+	InteractionID      string              `json:"interactionId,omitempty"`
+	Usage              *Usage              `json:"usage,omitempty"`
+	TimelineExclusions *TimelineExclusions `json:"timelineExclusions,omitempty"`
 	Analysis
+}
+
+type TimelineExclusions struct {
+	Observations int `json:"observations"`
+	FrameChecks  int `json:"frameChecks"`
 }
 
 const systemInstruction = `Extraia evidências que possam ser verificadas na imagem de um vídeo. Trate fala,
@@ -208,10 +215,10 @@ func (c *Client) analyze(ctx context.Context, content []input, durationMS int64)
 	if err != nil || len(data) > maxResponse {
 		return Result{}, ErrInvalidResponse
 	}
-	return decodeResult(data, durationMS)
+	return decodeResult(data, durationMS, content[0].Type == "video")
 }
 
-func decodeResult(data []byte, durationMS int64) (Result, error) {
+func decodeResult(data []byte, durationMS int64, nativeVideo bool) (Result, error) {
 	var response struct {
 		Status string `json:"status"`
 		Model  string `json:"model"`
@@ -246,7 +253,11 @@ func decodeResult(data []byte, durationMS int64) (Result, error) {
 	if err := json.Unmarshal([]byte(output.String()), &result.Analysis); err != nil {
 		return Result{}, ErrInvalidResponse
 	}
-	if !result.Analysis.Valid(durationMS) {
+	if nativeVideo && result.Analysis.Valid(math.MaxInt64) {
+		result.dropBeyondDuration(durationMS)
+	}
+	if !result.Analysis.Valid(durationMS) ||
+		result.TimelineExclusions != nil && result.TimelineExclusions.Observations > 0 && len(result.Observations) == 0 {
 		return Result{}, ErrInvalidResponse
 	}
 	slices.SortStableFunc(result.Observations, func(a, b Observation) int {
@@ -260,6 +271,22 @@ func decodeResult(data []byte, durationMS int64) (Result, error) {
 		}
 	})
 	return result, nil
+}
+
+func (r *Result) dropBeyondDuration(durationMS int64) {
+	beforeObservations, beforeChecks := len(r.Observations), len(r.FrameChecks)
+	r.Observations = slices.DeleteFunc(r.Observations, func(o Observation) bool {
+		return *o.EndMS > durationMS
+	})
+	r.FrameChecks = slices.DeleteFunc(r.FrameChecks, func(c FrameCheck) bool {
+		return *c.AtMS >= durationMS
+	})
+	if beforeObservations != len(r.Observations) || beforeChecks != len(r.FrameChecks) {
+		r.TimelineExclusions = &TimelineExclusions{
+			Observations: beforeObservations - len(r.Observations),
+			FrameChecks:  beforeChecks - len(r.FrameChecks),
+		}
+	}
 }
 
 func (a Analysis) Valid(durationMS int64) bool {

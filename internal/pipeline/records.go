@@ -180,6 +180,11 @@ func (k *knowledge) addVisual(record visualRecord, ref artifact, inspected bool)
 	}
 	unresolved := withoutImageLimitation(k.Coverage.Unresolved)
 	unresolved = append(unresolved, "A análise visual do Gemini usa imagens amostradas ao longo do vídeo.")
+	if discarded := record.Response.TimelineExclusions; discarded != nil {
+		unresolved = append(unresolved, fmt.Sprintf(
+			"O Gemini forneceu marcações além da duração do vídeo. Foram descartadas %d evidências e %d solicitações de frames. Confira os timestamps preservados no vídeo.",
+			discarded.Observations, discarded.FrameChecks))
+	}
 	if !inspected {
 		for _, check := range record.Response.FrameChecks {
 			unresolved = append(unresolved, fmt.Sprintf("Inspeção visual em %s — %s", timestamp(*check.AtMS), check.Reason))
