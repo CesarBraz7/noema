@@ -4,7 +4,7 @@ app:
 
 inbox:
   provider: github
-  repository: CesarBraz7/obsidian-vault
+  repository: OWNER/VAULT_REPO
   file: Inbox/links.md
   poll_minutes: 15
   allow_bare_urls: true

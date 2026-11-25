@@ -1,4 +1,4 @@
-// Package gemini uses the Gemini Developer API for visual evidence in public videos.
+// Package gemini uses the Gemini Developer API for visual evidence and concept drafts.
 package gemini
 
 import (
@@ -26,9 +26,9 @@ const FramePromptVersion = "youtube-frame-inspection-1"
 
 var (
 	ErrAuthorization   = errors.New("Gemini recusou a credencial ou o acesso ao modelo")
-	ErrRejected        = errors.New("Gemini não aceitou a análise visual")
+	ErrRejected        = errors.New("Gemini não aceitou a análise")
 	ErrNativeVideo     = errors.New("Gemini informou que a entrada nativa de vídeo é incompatível")
-	ErrInvalidResponse = errors.New("resposta de análise visual inválida do Gemini")
+	ErrInvalidResponse = errors.New("resposta de análise inválida do Gemini")
 	validModel         = regexp.MustCompile(`^gemini-[a-z0-9][a-z0-9.-]*$`)
 )
 
@@ -183,18 +183,26 @@ func (a Analysis) MatchesFrames(timestamps map[int64]bool) bool {
 }
 
 func (c *Client) analyze(ctx context.Context, content []input, durationMS int64) (Result, error) {
-	payload, err := json.Marshal(map[string]any{
-		"model": c.Model, "store": false, "input": content, "system_instruction": systemInstruction,
-		"response_format": map[string]any{
-			"type": "text", "mime_type": "application/json", "schema": json.RawMessage(analysisSchema),
-		},
-	})
+	data, err := c.interact(ctx, content, systemInstruction, analysisSchema)
 	if err != nil {
 		return Result{}, err
 	}
+	return decodeResult(data, durationMS, content[0].Type == "video")
+}
+
+func (c *Client) interact(ctx context.Context, content []input, instruction, schema string) ([]byte, error) {
+	payload, err := json.Marshal(map[string]any{
+		"model": c.Model, "store": false, "input": content, "system_instruction": instruction,
+		"response_format": map[string]any{
+			"type": "text", "mime_type": "application/json", "schema": json.RawMessage(schema),
+		},
+	})
+	if err != nil {
+		return nil, err
+	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.endpoint, bytes.NewReader(payload))
 	if err != nil {
-		return Result{}, errors.New("requisição inválida ao Gemini")
+		return nil, errors.New("requisição inválida ao Gemini")
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-goog-api-key", c.key)
@@ -202,23 +210,23 @@ func (c *Client) analyze(ctx context.Context, content []input, durationMS int64)
 	resp, err := c.http.Do(req)
 	if err != nil {
 		if ctx.Err() != nil {
-			return Result{}, ctx.Err()
+			return nil, ctx.Err()
 		}
-		return Result{}, errors.New("falha na conexão com o Gemini")
+		return nil, errors.New("falha na conexão com o Gemini")
 	}
 	defer resp.Body.Close()
 	const maxResponse = 1 << 20
 	data, err := io.ReadAll(io.LimitReader(resp.Body, maxResponse+1))
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return Result{}, statusError(resp, data, content[0].Type == "video")
+		return nil, statusError(resp, data, content[0].Type == "video")
 	}
 	if err != nil || len(data) > maxResponse {
-		return Result{}, ErrInvalidResponse
+		return nil, ErrInvalidResponse
 	}
-	return decodeResult(data, durationMS, content[0].Type == "video")
+	return data, nil
 }
 
-func decodeResult(data []byte, durationMS int64, nativeVideo bool) (Result, error) {
+func decodeOutput(data []byte, target any) (Result, error) {
 	var response struct {
 		Status string `json:"status"`
 		Model  string `json:"model"`
@@ -250,9 +258,19 @@ func decodeResult(data []byte, durationMS int64, nativeVideo bool) (Result, erro
 		}
 	}
 	result := Result{Model: response.Model, InteractionID: response.ID, Usage: response.Usage}
-	if err := json.Unmarshal([]byte(output.String()), &result.Analysis); err != nil {
+	if err := json.Unmarshal([]byte(output.String()), target); err != nil {
 		return Result{}, ErrInvalidResponse
 	}
+	return result, nil
+}
+
+func decodeResult(data []byte, durationMS int64, nativeVideo bool) (Result, error) {
+	var analysis Analysis
+	result, err := decodeOutput(data, &analysis)
+	if err != nil {
+		return Result{}, err
+	}
+	result.Analysis = analysis
 	if nativeVideo && result.Analysis.Valid(math.MaxInt64) {
 		result.dropBeyondDuration(durationMS)
 	}

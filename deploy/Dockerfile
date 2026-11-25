@@ -38,7 +38,7 @@ COPY deploy/extractors.requirements.txt /tmp/extractors.requirements.txt
 RUN --mount=type=secret,id=build_ca_bundle \
     if [ -s /run/secrets/build_ca_bundle ]; then export PIP_CERT=/run/secrets/build_ca_bundle; fi \
     && apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates ffmpeg python3-venv \
+    && apt-get install -y --no-install-recommends ca-certificates ffmpeg python3-venv tesseract-ocr tesseract-ocr-por \
     && rm -rf /var/lib/apt/lists/* \
     && python3 -m venv /opt/noema-extractors \
     && /opt/noema-extractors/bin/pip --disable-pip-version-check --no-cache-dir install -r /tmp/extractors.requirements.txt \

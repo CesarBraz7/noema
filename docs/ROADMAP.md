@@ -4,8 +4,10 @@ A pipeline é construída por incrementos testáveis, sem ativar cobranças por 
 
 O desenvolvimento e a validação funcionam no Windows com Docker Desktop. A escolha do host e a validação de acesso, cotas e armazenamento ficam para a implantação contínua.
 
+A primeira proposta de nota conceitual antecipa parte da Fase 5. Depois desse incremento, a prioridade de ingestão é o Instagram. A integração com X fica para depois.
+
 ## Fase 0 — Base de desenvolvimento e segurança
-- Manter os três repositórios privados e documentar permissões.
+- Manter os repositórios de dados privados e documentar permissões.
 - Preparar Go, ambiente Docker ARM64/AMD64, CI e configuração por ambiente.
 - Validar a conexão com o Neon a partir do Docker local.
 - Criar contratos iniciais e ferramentas de desenvolvimento local.
@@ -29,8 +31,8 @@ O desenvolvimento e a validação funcionam no Windows com Docker Desktop. A esc
 - **Aceite:** vídeo técnico com fala, código e slides gera conhecimento rastreável.
 
 ## Fase 3 — Instagram e X
-- Integrar gallery-dl, Instaloader e adaptadores textuais/mídia.
-- Preservar carrosséis ordenados, legendas e contexto; sinalizar capturas incompletas.
+- Instagram implementado para Reels, carrosséis e posts de imagem, com transcrição, OCR e captura parcial explícita.
+- A ingestão de X permanece pendente.
 - **Aceite:** Reel, carrossel e post com mídia funcionam ou registram acesso/captura parcial com clareza.
 
 ## Fase 4 — Resiliência, cotas e recuperação
@@ -40,8 +42,9 @@ O desenvolvimento e a validação funcionam no Windows com Docker Desktop. A esc
 - **Aceite:** retomar do checkpoint durável sem repetir operações custosas evitáveis.
 
 ## Fase 5 — Consolidação do segundo cérebro
+- Gerar documentos de estudo autossuficientes a partir de uma fonte já processada, com exemplos aplicáveis e evidências para revisão no vault.
 - Classificar conceitos sem taxonomia rígida, gerar links entre notas de fontes.
 - Proteger notas pessoais e sinalizar contradições para revisão.
-- **Aceite:** fontes de plataformas diferentes contribuem para conceitos associados.
+- **Aceite:** a nota permite entender e aplicar o tema a partir do próprio conteúdo. Fontes complementares acrescentam contexto quando pertinente.
 
 Referência vigente: [Especificação v1.3 auditada](especificacao-arquitetura-v1.3-auditada.md) · [Auditoria](AUDITORIA-DECISOES-2026-11-22.md).

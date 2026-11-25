@@ -11,8 +11,9 @@
       "properties": {
         "url": { "type": "string", "format": "uri" },
         "resolvedUrl": { "type": "string", "format": "uri" },
-        "type": { "enum": ["article", "video"] },
-        "platform": { "enum": ["web", "youtube"] },
+        "type": { "enum": ["article", "video", "instagram"] },
+        "platform": { "enum": ["web", "youtube", "instagram"] },
+        "format": { "enum": ["reel", "carousel", "post"] },
         "title": { "type": "string", "minLength": 1 },
         "author": { "type": "string" },
         "publishedAt": { "type": "string", "format": "date" },
@@ -38,7 +39,7 @@
       "required": ["status", "method", "missing"],
       "properties": {
         "status": { "enum": ["complete", "partial"] },
-        "method": { "enum": ["trafilatura", "yt-dlp", "whisper.cpp"] },
+        "method": { "enum": ["trafilatura", "yt-dlp", "whisper.cpp", "gallery-dl"] },
         "missing": { "type": "array", "items": { "type": "string" } },
         "captionLanguage": { "type": "string", "minLength": 1 },
         "automaticCaptions": { "type": "boolean" },
@@ -68,8 +69,9 @@
         "required": ["id", "kind", "text"],
         "properties": {
           "id": { "type": "string", "pattern": "^b-[0-9]+$" },
-          "kind": { "enum": ["paragraph", "transcript_segment"] },
+          "kind": { "enum": ["paragraph", "transcript_segment", "caption", "ocr_text"] },
           "text": { "type": "string", "minLength": 1 },
+          "mediaPosition": { "type": "integer", "minimum": 1 },
           "startMs": { "type": "integer", "minimum": 0 },
           "endMs": { "type": "integer", "minimum": 0 }
         }
@@ -91,11 +93,12 @@
         }
       }
     },
-    "media": { "type": "array", "maxItems": 0 }
+    "media": { "type": "array" }
   },
   "if": { "properties": { "source": { "properties": { "type": { "const": "video" } } } } },
   "then": {
     "properties": {
+      "media": { "maxItems": 0 },
       "source": { "properties": { "platform": { "const": "youtube" } } },
       "capture": { "properties": { "method": { "enum": ["yt-dlp", "whisper.cpp"] } } },
       "blocks": {
@@ -131,13 +134,37 @@
     }
   },
   "else": {
+    "if": { "properties": { "source": { "properties": { "type": { "const": "instagram" } } } } },
+    "then": {
+      "properties": {
+        "source": { "required": ["format"], "properties": { "platform": { "const": "instagram" } } },
+        "capture": { "properties": { "method": { "enum": ["yt-dlp", "gallery-dl"] } } },
+        "media": {
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "required": ["position", "kind"],
+            "dependentRequired": { "file": ["size", "sha256"], "size": ["file"], "sha256": ["file"] },
+            "properties": {
+              "position": { "type": "integer", "minimum": 1 },
+              "kind": { "enum": ["image", "video", "unknown"] },
+              "file": { "type": "string", "pattern": "^instagram/[A-Za-z0-9_-]+/item-[0-9]+\\.[a-z0-9]+$" },
+              "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+              "size": { "type": "integer", "minimum": 1 }
+            }
+          }
+        }
+      }
+    },
+    "else": {
     "properties": {
+      "media": { "maxItems": 0 },
       "source": { "properties": { "platform": { "const": "web" } } },
       "capture": { "properties": { "method": { "const": "trafilatura" } } },
       "blocks": {
         "minItems": 1,
         "items": { "properties": { "kind": { "const": "paragraph" } } }
       }
-    }
+    }}
   }
 }

@@ -15,7 +15,7 @@ import (
 
 const version = "0.1.0"
 
-const usage = "uso: noema {version|migrate|once|run|inspect-video [--captions] URL|retry-video URL}"
+const usage = "uso: noema {version|migrate|once|run|inspect-video [--captions] URL|retry-video URL|draft-concept TEMA URL_FONTE [URL_COMPLEMENTAR]}"
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -50,6 +50,17 @@ func run(ctx context.Context, args []string) error {
 		}
 		fmt.Printf("Pedidos de vídeo reenfileirados %d\n", count)
 		return nil
+	case (len(args) == 3 || len(args) == 4) && args[0] == "draft-concept":
+		proposal, err := pipeline.DraftConcept(ctx, args[1], args[2:]...)
+		if err != nil {
+			return err
+		}
+		if proposal.Created {
+			fmt.Printf("Proposta criada em %s\n", proposal.Path)
+		} else {
+			fmt.Printf("Proposta existente em %s\n", proposal.Path)
+		}
+		return nil
 	case len(args) != 1:
 		return errors.New(usage)
 	}
@@ -63,6 +74,8 @@ func run(ctx context.Context, args []string) error {
 		return errors.New("uso: noema inspect-video [--captions] URL")
 	case "retry-video":
 		return errors.New("uso: noema retry-video URL")
+	case "draft-concept":
+		return errors.New("uso: noema draft-concept TEMA URL_FONTE [URL_COMPLEMENTAR]")
 	case "once", "run":
 		app, err := pipeline.FromEnv(ctx, databaseURL())
 		if err != nil {

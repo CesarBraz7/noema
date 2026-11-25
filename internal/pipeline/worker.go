@@ -14,6 +14,7 @@ import (
 
 	"github.com/CesarBraz7/noema/internal/adapters/article"
 	"github.com/CesarBraz7/noema/internal/adapters/gemini"
+	"github.com/CesarBraz7/noema/internal/adapters/instagram"
 	"github.com/CesarBraz7/noema/internal/adapters/video"
 	"github.com/CesarBraz7/noema/internal/storage/github"
 	"github.com/CesarBraz7/noema/schemas"
@@ -66,6 +67,9 @@ type ingestionWorker struct {
 	discoverVideo      func(context.Context, string) (video.Capture, error)
 	readCaptions       func(context.Context, string) (video.Capture, error)
 	transcribeVideo    func(context.Context, video.Capture) (video.Transcript, error)
+	instagram          instagramExtractor
+	transcribeFile     func(context.Context, string, string) (video.Transcript, error)
+	workDir            string
 	transcriberVersion string
 	visual             *visualStage
 	videoAttempt       time.Duration
@@ -131,7 +135,7 @@ func (w *ingestionWorker) Work(ctx context.Context, job *river.Job[ingestionJob]
 		switch {
 		case errors.Is(err, errReview):
 			state, permanent = "NEEDS_REVIEW", true
-		case errors.Is(err, article.ErrAccess), errors.Is(err, github.ErrPermission), errors.Is(err, video.ErrAudioAccess):
+		case errors.Is(err, article.ErrAccess), errors.Is(err, github.ErrPermission), errors.Is(err, video.ErrAudioAccess), errors.Is(err, instagram.ErrAccess):
 			state, permanent = "ACCESS_REQUIRED", true
 		case errors.Is(err, article.ErrUnsupported), errors.Is(err, article.ErrUnsafe), errors.Is(err, errArtifactTooLarge):
 			state, permanent = "FAILED", true
@@ -160,7 +164,11 @@ func (w *ingestionWorker) process(ctx context.Context, req request) error {
 	var err error
 	extractorVersion := article.Version
 	consolidationKind, noteFolder := consolidationVersion, "Artigos"
-	if req.isVideo() {
+	if strings.HasPrefix(req.sourceID, instagramSourcePrefix) {
+		consolidationKind, noteFolder = "instagram-excerpts-v1", "Instagram"
+		extractorVersion = instagram.Version
+		source, captureRef, err = w.captureInstagram(ctx, req, root)
+	} else if req.isVideo() {
 		consolidationKind, noteFolder = videoConsolidationVersion, "Videos"
 		source, captureRef, extractorVersion, err = w.captureVideo(ctx, req, root)
 	} else {

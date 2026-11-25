@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/CesarBraz7/noema/internal/adapters/article"
+	"github.com/CesarBraz7/noema/internal/adapters/instagram"
 	"github.com/CesarBraz7/noema/internal/adapters/video"
 	"github.com/CesarBraz7/noema/internal/inbox"
 	"github.com/CesarBraz7/noema/internal/storage/github"
@@ -49,6 +50,9 @@ type App struct {
 	discoverVideo      func(context.Context, string) (video.Capture, error)
 	readCaptions       func(context.Context, string) (video.Capture, error)
 	transcribeVideo    func(context.Context, video.Capture) (video.Transcript, error)
+	instagram          instagramExtractor
+	transcribeFile     func(context.Context, string, string) (video.Transcript, error)
+	workDir            string
 	transcriberVersion string
 	visual             *visualStage
 	videoAttempt       time.Duration
@@ -56,20 +60,29 @@ type App struct {
 	etag               string
 }
 
-func FromEnv(ctx context.Context, database string) (*App, error) {
-	if database == "" {
-		return nil, errors.New("defina DATABASE_URL_UNPOOLED ou DATABASE_URL com uma conexão direta")
-	}
-	owner := envDefault("GITHUB_OWNER", "CesarBraz7")
-	vault := envDefault("GITHUB_VAULT_REPO", "obsidian-vault")
-	artifacts := envDefault("GITHUB_ARTIFACTS_REPO", "noema-artifacts")
+func repositoriesFromEnv() (*github.Repository, *github.Repository, error) {
+	owner := os.Getenv("GITHUB_OWNER")
+	vault := os.Getenv("GITHUB_VAULT_REPO")
+	artifacts := os.Getenv("GITHUB_ARTIFACTS_REPO")
 	if !repositoryName.MatchString(owner) || !repositoryName.MatchString(vault) || !repositoryName.MatchString(artifacts) || strings.EqualFold(vault, artifacts) {
-		return nil, errors.New("configure nomes válidos e distintos para os repositórios de vault e artefatos")
+		return nil, nil, errors.New("configure GITHUB_OWNER, GITHUB_VAULT_REPO e GITHUB_ARTIFACTS_REPO com nomes válidos e repositórios distintos")
 	}
 	vaultToken := envDefault("GITHUB_VAULT_TOKEN", os.Getenv("GITHUB_TOKEN"))
 	artifactsToken := envDefault("GITHUB_ARTIFACTS_TOKEN", os.Getenv("GITHUB_TOKEN"))
 	if vaultToken == "" || artifactsToken == "" {
-		return nil, errors.New("defina os tokens GitHub do vault e dos artefatos")
+		return nil, nil, errors.New("defina os tokens GitHub do vault e dos artefatos")
+	}
+	const base = "https://api.github.com"
+	return github.New(base, owner, vault, vaultToken), github.New(base, owner, artifacts, artifactsToken), nil
+}
+
+func FromEnv(ctx context.Context, database string) (*App, error) {
+	if database == "" {
+		return nil, errors.New("defina DATABASE_URL_UNPOOLED ou DATABASE_URL com uma conexão direta")
+	}
+	vault, artifacts, err := repositoriesFromEnv()
+	if err != nil {
+		return nil, err
 	}
 	extractor := article.New("trafilatura")
 	if err := extractor.Check(ctx); err != nil {
@@ -94,9 +107,10 @@ func FromEnv(ctx context.Context, database string) (*App, error) {
 	app := &App{
 		database: database, validator: validator, extractor: extractor, discoverVideo: video.Discover,
 		readCaptions: video.Inspect, videoAttempt: attempt, visual: visual,
-		vault:     github.New("https://api.github.com", owner, vault, vaultToken),
-		artifacts: github.New("https://api.github.com", owner, artifacts, artifactsToken),
+		vault: vault, artifacts: artifacts,
+		workDir: envDefault("NOEMA_WORK_DIR", "data"),
 	}
+	app.instagram = instagram.New(app.workDir)
 	modelPath := envDefault("NOEMA_WHISPER_MODEL", video.WhisperModelPath)
 	transcriber, err := video.NewTranscriber(envDefault("NOEMA_WORK_DIR", "data"), modelPath, window)
 	if errors.Is(err, os.ErrNotExist) && os.Getenv("NOEMA_WHISPER_MODEL") == "" {
@@ -106,6 +120,7 @@ func FromEnv(ctx context.Context, database string) (*App, error) {
 		return nil, fmt.Errorf("configurar ASR local: %w", err)
 	}
 	app.transcribeVideo, app.transcriberVersion = transcriber.Transcribe, transcriber.Version()
+	app.transcribeFile = transcriber.TranscribeFile
 	return app, nil
 }
 
@@ -257,6 +272,8 @@ func enqueue(ctx context.Context, db *pgxpool.Pool, entries []inbox.Entry, visua
 			prefix, version := "web-", ""
 			if entry.Video {
 				prefix, version = videoSourcePrefix, visualVersion
+			} else if entry.Instagram {
+				prefix = instagramSourcePrefix
 			}
 			id := prefix + digest([]byte(entry.URL))
 			if _, err := tx.Exec(ctx, `INSERT INTO noema_sources (id, canonical_url) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`, id, entry.URL); err != nil {
@@ -267,7 +284,7 @@ func enqueue(ctx context.Context, db *pgxpool.Pool, entries []inbox.Entry, visua
 				return err
 			}
 			if requestID != 0 {
-				job := ingestionJob{RequestID: requestID, Transcribe: entry.Video, VisualVersion: version}
+				job := ingestionJob{RequestID: requestID, Transcribe: entry.Video || entry.Instagram, VisualVersion: version}
 				if _, err := client.InsertTx(ctx, tx, job, &river.InsertOpts{Queue: queueName, MaxAttempts: 3}); err != nil {
 					return err
 				}
@@ -336,6 +353,7 @@ func (a *App) work(ctx context.Context, db *pgxpool.Pool) (err error) {
 		db: db, vault: a.vault, artifacts: a.artifacts, validator: a.validator,
 		extractor: a.extractor, discoverVideo: a.discoverVideo, readCaptions: a.readCaptions,
 		transcribeVideo: a.transcribeVideo, transcriberVersion: a.transcriberVersion, videoAttempt: a.videoAttempt,
+		instagram: a.instagram, transcribeFile: a.transcribeFile, workDir: a.workDir,
 		visual: a.visual,
 	})
 	client, err := river.NewClient(riverpgxv5.New(db), &river.Config{

@@ -98,6 +98,37 @@ func (t *Transcriber) Transcribe(ctx context.Context, capture Capture) (Transcri
 	if err != nil {
 		return Transcript{}, err
 	}
+	return t.transcribeAudio(ctx, workspace, audio, "youtube/"+id+"/"+audio.File)
+}
+
+// TranscribeFile processes the audio stream of an already captured media file.
+func (t *Transcriber) TranscribeFile(ctx context.Context, filename, relativeFile string) (Transcript, error) {
+	info, err := os.Lstat(filename)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 {
+		return Transcript{}, ErrAudioUnavailable
+	}
+	probe := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-protocol_whitelist", "file",
+		"-select_streams", "a:0", "-show_entries", "stream=codec_type", "-of", "csv=p=0", filename)
+	probe.Env = extractorEnv(filepath.Dir(filename))
+	out, err := probe.Output()
+	if err != nil {
+		if ctx.Err() != nil {
+			return Transcript{}, ctx.Err()
+		}
+		return Transcript{}, errors.New("FFprobe não conseguiu ler o áudio capturado")
+	}
+	if strings.TrimSpace(string(out)) != "audio" {
+		return Transcript{}, ErrAudioUnavailable
+	}
+	sha, err := fileSHA(filename)
+	if err != nil {
+		return Transcript{}, err
+	}
+	audio := audioSnapshot{File: filepath.Base(filename), SHA256: sha, Size: info.Size()}
+	return t.transcribeAudio(ctx, filepath.Dir(filename), audio, relativeFile)
+}
+
+func (t *Transcriber) transcribeAudio(ctx context.Context, workspace string, audio audioSnapshot, relativeFile string) (Transcript, error) {
 	pcm, parts, err := normalizeAudio(ctx, workspace, audio, t.window)
 	if err != nil {
 		return Transcript{}, err
@@ -126,13 +157,13 @@ func (t *Transcriber) Transcribe(ctx context.Context, capture Capture) (Transcri
 			return Transcript{}, fmt.Errorf("%w: %d de %d segmentos", ErrMoreAudio, i+1, len(parts))
 		}
 	}
-	return t.joinTranscript(checkpoints, audio, parts, id)
+	return t.joinTranscript(checkpoints, audio, parts, relativeFile)
 }
 
-func (t *Transcriber) joinTranscript(checkpoints string, audio audioSnapshot, parts []audioPart, id string) (Transcript, error) {
+func (t *Transcriber) joinTranscript(checkpoints string, audio audioSnapshot, parts []audioPart, relativeFile string) (Transcript, error) {
 	transcript := Transcript{
 		Model: strings.TrimSuffix(filepath.Base(t.modelPath), filepath.Ext(t.modelPath)), ModelSHA: t.modelSHA,
-		Audio: &AudioEvidence{File: "youtube/" + id + "/" + audio.File, SHA256: audio.SHA256, Size: audio.Size,
+		Audio: &AudioEvidence{File: relativeFile, SHA256: audio.SHA256, Size: audio.Size,
 			StartMS: parts[0].startMS, EndMS: parts[len(parts)-1].endMS, Parts: len(parts)},
 	}
 	for i, part := range parts {

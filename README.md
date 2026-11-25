@@ -2,28 +2,27 @@
 
 **Pipeline pessoal de ingestão e consolidação de conhecimento.**
 
-O Noema transforma links em conhecimento rastreável no Obsidian. A ingestão cobre artigos web e vídeos públicos do YouTube.
+O Noema transforma links em notas de fonte e documentos de estudo rastreáveis no Obsidian. Roda localmente em Docker Compose.
 
-> **Fase 1.** A ingestão de artigos usa GitHub, PostgreSQL, River OSS e Trafilatura. A síntese seleciona trechos localmente, com referência ao bloco capturado e sem chamadas de IA.
+## O que já funciona
 
-> **Fase 2 em andamento.** Vídeos do YouTube passam pela extração e transcrição do áudio original. A análise visual com Gemini pode ser habilitada no worker local. [Roadmap](docs/ROADMAP.md#fase-2--vídeos)
+- **Artigos web** com extração de texto, referências por bloco e publicação de uma nota de fonte.
+- **YouTube** com transcrição do áudio original pelo Whisper, checkpoints por segmento, capítulos e análise visual opcional com Gemini.
+- **Instagram** com Reels, carrosséis e posts de imagem, preservando a legenda, a ordem das mídias, a transcrição de vídeos e o texto reconhecido nas imagens.
+- **Documentos de estudo** com explicações, exemplos e evidências a partir de uma fonte. Uma segunda fonte pode acrescentar contexto. O documento vai para revisão antes de entrar em `Conhecimento/`.
 
-## Repositórios
+O fluxo no Docker foi validado com artigos, vídeos do YouTube de mais de 20 minutos, três Reels e um carrossel de 11 imagens. O teste de integração cobre um post de imagem simulado. [Roadmap](docs/ROADMAP.md)
 
-| Repositório | Papel |
-|---|---|
-| [CesarBraz7/noema](https://github.com/CesarBraz7/noema) | Orquestração Go, integração, Docker e documentação |
-| [CesarBraz7/noema-artifacts](https://github.com/CesarBraz7/noema-artifacts) | JSONs, transcrições, análise e checkpoints duráveis |
-| [CesarBraz7/obsidian-vault](https://github.com/CesarBraz7/obsidian-vault) | Inbox e notas Markdown para abrir no Obsidian |
+O código e a documentação vivem neste repositório. Cada instalação usa dois repositórios privados próprios para os dados, um para a inbox e as notas do Obsidian e outro para os artefatos JSON e as evidências.
 
 ## Arquitetura de referência
 
 - **Go** como orquestrador enxuto, rodando em Docker Compose no Windows durante o desenvolvimento e compatível com hosts Linux AMD64 e ARM64;
 - **PostgreSQL externo (Neon) + River OSS** para fontes, jobs, retries e estados;
-- **Extractor First:** `yt-dlp`, `gallery-dl`, `Instaloader`, `trafilatura`, FFmpeg e navegador somente em último caso;
-- **IA multimodal por API:** Gemini, Groq e fallbacks compatíveis, priorizando níveis gratuitos;
+- **Extração:** `yt-dlp`, `gallery-dl`, `trafilatura`, FFmpeg, Whisper e Tesseract;
+- **IA opcional via Gemini:** análise visual do YouTube e propostas de documentos de estudo;
 - **Artefatos auditáveis:** `source-content.json`, análise por modalidade, `knowledge.json` e `manifest.json`;
-- **Persistência separada:** GitHub privado para JSON/textos; OCI Object Storage para binários selecionados;
+- **Persistência separada:** repositórios privados para notas e artefatos, com mídias em armazenamento local;
 - **Saída:** notas de fonte e conceitos para Obsidian, preservando anotações pessoais.
 
 ## Documentos
@@ -33,13 +32,13 @@ O Noema transforma links em conhecimento rastreável no Obsidian. A ingestão co
 - [Auditoria de decisões e correções](docs/AUDITORIA-DECISOES-2026-11-22.md)
 - [Decisões arquiteturais (ADRs)](docs/adr/0001-base-arquitetural.md)
 
-## Executar a Fase 1
+## Executar localmente
 
 Os comandos abaixo funcionam no Windows com o Docker Desktop iniciado. O worker no contêiner se conecta ao Neon e ao GitHub.
 
 1. Após vincular o projeto com `neon init`, rode `neon deploy` para trazer as variáveis do Postgres. O CLI cria `.env.local` ou atualiza `.env` se ele já existir. O Noema prefere `DATABASE_URL_UNPOOLED` e aceita `DATABASE_URL` como alternativa para uma conexão **direta** via TLS. A conexão direta é necessária para o River e o lock de sessão do worker.
-2. No mesmo arquivo de ambiente, configure um token GitHub da conta `CesarBraz7` com `Contents: Read and write` nos dois repositórios de dados. Use `GITHUB_TOKEN` para um único token, ou `GITHUB_VAULT_TOKEN` e `GITHUB_ARTIFACTS_TOKEN` para tokens separados. Os commits da automação são atribuídos pela API do GitHub à conta autenticada.
-3. Adicione um link de artigo ou vídeo individual do YouTube ao `Inbox/links.md` no GitHub ou no Obsidian. Se editar pelo Obsidian, envie a alteração ao GitHub. O check da caixa é opcional. Use uma linha indentada para acrescentar foco.
+2. No mesmo arquivo, defina `GITHUB_OWNER`, `GITHUB_VAULT_REPO` e `GITHUB_ARTIFACTS_REPO` para os seus repositórios de dados. Configure um token com `Contents: Read and write` nesses repositórios. Use `GITHUB_TOKEN` para um token compartilhado ou `GITHUB_VAULT_TOKEN` e `GITHUB_ARTIFACTS_TOKEN` para tokens separados. O [arquivo de exemplo](.env.example) lista as variáveis.
+3. Adicione um link de artigo, vídeo individual do YouTube ou publicação do Instagram a `Inbox/links.md` no GitHub ou no Obsidian. Se editar pelo Obsidian, envie a alteração ao GitHub. O check da caixa é opcional. Use uma linha indentada para acrescentar foco.
 4. Construa a imagem, prepare o banco e rode um primeiro ciclo. Se o CLI gravou em `.env`, use esse arquivo no argumento `--env-file`.
 
 ```bash
@@ -93,6 +92,28 @@ docker compose -f deploy/compose.yaml run --build --rm noema inspect-video 'http
 ```
 
 O comando imprime metadados e capítulos disponíveis em JSON. Os capítulos têm início e fim em milissegundos. Para diagnosticar legendas, passe `inspect-video --captions URL`. Nesse modo, `captionsStatus` informa se a legenda foi obtida (`available`), se nenhuma faixa compatível foi encontrada (`unavailable`) ou se a leitura falhou (`fetch_failed`). Para gravar artefatos e publicar a nota com links para os capítulos, use a inbox e execute `once`.
+
+## Ingerir uma publicação do Instagram
+
+Adicione um link individual `/p/`, `/reel/` ou `/tv/` à inbox e execute `once` pelo Docker Compose. Os formatos de URL do mesmo shortcode apontam para a mesma fonte. A mídia retornada determina se a publicação é um Reel, carrossel ou post de imagem.
+
+O Noema preserva a legenda e a ordem dos itens. Usa o áudio original para transcrever vídeos e o Tesseract em português e inglês para ler texto das imagens. Os arquivos de mídia ficam no diretório local de trabalho. A captura associada ao manifesto registra posição, tipo e hash dos arquivos. A nota é publicada em `Fontes/Instagram/` e indica itens ausentes ou outras lacunas. Uma publicação que exige acesso indisponível recebe `ACCESS_REQUIRED`.
+
+## Propor uma nota conceitual
+
+Escolha um tema e use a URL original de um artigo, vídeo público do YouTube ou publicação do Instagram que já tenha uma nota no vault. Com o Gemini gratuito configurado, rode o comando pelo Docker Compose.
+
+```powershell
+docker compose --env-file .env.local -f deploy/compose.yaml run --rm noema draft-concept 'Captura de variáveis de laço em Go' 'https://go.dev/blog/loopvar-preview'
+```
+
+O documento explica o tema e inclui exemplos que podem ser entendidos pela própria nota, com preparação, código e saída esperada quando a evidência sustenta esses detalhes. Você pode passar uma segunda URL ao final do comando para acrescentar contexto. Uma conexão entre fontes só aparece quando ajuda a explicar o tema.
+
+O comando confere os artefatos do manifesto e usa o texto, a transcrição e as observações visuais disponíveis. Conjuntos maiores são examinados em partes, na ordem da fonte. Os achados de cada parte são guardados no diretório de trabalho para reutilização em uma nova tentativa. O modelo sintetiza os achados e faz uma segunda leitura das afirmações contra as referências antes de gravar a proposta.
+
+O caminho retornado fica em `Revisao/Conceitos/`. A nota mostra a cobertura da análise e inclui links para os blocos e timestamps citados. Após revisar o conteúdo, copie a versão aprovada para `Conhecimento/`.
+
+Enquanto a proposta estiver em revisão, repetir o mesmo tema com as mesmas URLs abre o mesmo caminho e preserva as edições. Esse ciclo reaproveita os artefatos de captura.
 
 ## Verificar localmente
 

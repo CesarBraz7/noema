@@ -23,7 +23,7 @@
 - Extratores open source do GitHub com navegador apenas em último recurso
 - Transcrição auditável do áudio, vídeo multimodal para captar slides, código e demonstrações
 - `source-content.json` separado de `knowledge.json` e de Markdown do Obsidian
-- GitHub `CesarBraz7/noema`, `noema-artifacts` e `obsidian-vault`
+- GitHub com um repositório de código e dois repositórios privados para artefatos e vault
 - Persistência por função, gratuito primeiro, pagamento desabilitado, proteção de notas pessoais
 - Processamento no Windows por enquanto, migração a host ARM64/AMD64 quando disponível
 

@@ -64,25 +64,33 @@ func (w *ingestionWorker) putTranscriptParts(ctx context.Context, source sourceC
 
 func (w *ingestionWorker) readTranscriptParts(ctx context.Context, source *sourceContent, location string) error {
 	for i, ref := range source.TranscriptParts {
-		if ref.Kind != schemas.TranscriptPart || ref.Path != transcriptPartPath(location, i, ref.SHA256) {
-			return fmt.Errorf("%w: referência de transcrição inválida", errReview)
-		}
-		file, err := w.artifacts.Get(ctx, ref.Path, "")
+		part, data, err := readTranscriptPart(ctx, w.artifacts, w.validator, source.SourceID, location, i, ref)
 		if err != nil {
 			return err
 		}
-		var part transcriptPart
-		if !file.Exists || len(file.Data) != ref.Size || digest(file.Data) != ref.SHA256 ||
-			w.validator.Validate(schemas.TranscriptPart, file.Data) != nil ||
-			json.Unmarshal(file.Data, &part) != nil || part.SourceID != source.SourceID {
-			return fmt.Errorf("%w: parte de transcrição inválida em %s", errReview, ref.Path)
-		}
-		if _, err := w.recordArtifact(ctx, source.SourceID, schemas.TranscriptPart, ref.Path, file.Data, []string{}); err != nil {
+		if _, err := w.recordArtifact(ctx, source.SourceID, schemas.TranscriptPart, ref.Path, data, []string{}); err != nil {
 			return err
 		}
 		source.Blocks = append(source.Blocks, part.Blocks...)
 	}
 	return nil
+}
+
+func readTranscriptPart(ctx context.Context, repo *github.Repository, validator schemas.Validator, sourceID, location string, index int, ref artifact) (transcriptPart, []byte, error) {
+	if ref.Kind != schemas.TranscriptPart || ref.Path != transcriptPartPath(location, index, ref.SHA256) {
+		return transcriptPart{}, nil, fmt.Errorf("%w: referência de transcrição inválida", errReview)
+	}
+	file, err := repo.Get(ctx, ref.Path, "")
+	if err != nil {
+		return transcriptPart{}, nil, err
+	}
+	var part transcriptPart
+	if !file.Exists || len(file.Data) != ref.Size || digest(file.Data) != ref.SHA256 ||
+		validator.Validate(schemas.TranscriptPart, file.Data) != nil ||
+		json.Unmarshal(file.Data, &part) != nil || part.SourceID != sourceID {
+		return transcriptPart{}, nil, fmt.Errorf("%w: parte de transcrição inválida em %s", errReview, ref.Path)
+	}
+	return part, file.Data, nil
 }
 
 func transcriptPartPath(sourcePath string, index int, sha string) string {

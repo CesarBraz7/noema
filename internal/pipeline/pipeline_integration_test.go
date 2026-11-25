@@ -17,6 +17,7 @@ import (
 
 	"github.com/CesarBraz7/noema/internal/adapters/article"
 	"github.com/CesarBraz7/noema/internal/adapters/gemini"
+	"github.com/CesarBraz7/noema/internal/adapters/instagram"
 	"github.com/CesarBraz7/noema/internal/adapters/video"
 	"github.com/CesarBraz7/noema/internal/storage/github"
 	"github.com/CesarBraz7/noema/schemas"
@@ -575,6 +576,38 @@ func TestArticleFlow(t *testing.T) {
 			})
 		})
 	})
+	t.Run("Instagram post de imagem", func(t *testing.T) {
+		const canonical = "https://www.instagram.com/p/Photo_123/"
+		var calls int
+		app.instagram = instagramExtractorFunc(func(_ context.Context, address string) (instagram.Post, error) {
+			calls++
+			if address != canonical {
+				t.Fatalf("URL inesperada: %q", address)
+			}
+			return instagram.Post{
+				Format: "post", Title: "Publicação de imagem", Caption: "Legenda de teste", Method: "yt-dlp",
+				Assets: []instagram.Asset{{Position: 1, Kind: "image"}},
+			}, nil
+		})
+		server.set(inbox, "- "+canonical+"\n- https://instagram.com/p/Photo_123/?igsh=abc\n")
+		cycle(true)
+		id := instagramSourcePrefix + digest([]byte(canonical))
+		notePath := "/repos/owner/vault/contents/Fontes/Instagram/" + id + ".md"
+		doc := server.get(notePath)
+		if calls != 1 || !strings.Contains(doc, "Legenda de teste") || !strings.Contains(doc, "Mídia 1 indisponível") {
+			t.Fatalf("post do Instagram: %d capturas, nota %q", calls, doc)
+		}
+		var state string
+		if err := db.QueryRow(ctx, "SELECT state FROM noema_ingestion_requests WHERE source_id = $1", id).Scan(&state); err != nil || state != "COMPLETED" {
+			t.Fatalf("estado do post = %q, %v", state, err)
+		}
+	})
+}
+
+type instagramExtractorFunc func(context.Context, string) (instagram.Post, error)
+
+func (f instagramExtractorFunc) Extract(ctx context.Context, url string) (instagram.Post, error) {
+	return f(ctx, url)
 }
 
 // Move one retry forward instead of waiting for its backoff during the test.

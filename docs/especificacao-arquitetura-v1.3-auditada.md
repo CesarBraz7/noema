@@ -1,5 +1,5 @@
 > **Projeto:** Noema | versão 1.3 auditada e corrigida
-> **Repositórios:** [core](https://github.com/CesarBraz7/noema), [artefatos](https://github.com/CesarBraz7/noema-artifacts), [vault](https://github.com/CesarBraz7/obsidian-vault).
+> **Repositórios** · Código neste projeto, artefatos e vault em repositórios privados configurados por instalação.
 
 # Noema — Especificação de Produto e Arquitetura Técnica
 
@@ -485,6 +485,7 @@ Para publicar notas geradas, usar caminhos controlados, commits de bot identific
 
 ## 14. Regras da síntese de conhecimento
 
+- Cada documento de estudo deve explicar o tema, as condições e os exemplos de forma autossuficiente. As referências dão acesso à evidência para conferência. Ligações com outras notas são opcionais e acrescentam contexto quando ajudam na compreensão.
 - Nota de fonte ≠ transcrição literal. A transcrição continua preservada como artefato auditável.
 - Cada insight deve apontar para trecho/slide/bloco ou referência equivalente.
 - A IA não deve afirmar ter observado parte do material que não foi capturada.

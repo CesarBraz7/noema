@@ -12,6 +12,7 @@ import (
 
 	"github.com/CesarBraz7/noema/internal/adapters/article"
 	"github.com/CesarBraz7/noema/internal/adapters/gemini"
+	"github.com/CesarBraz7/noema/internal/adapters/instagram"
 	"github.com/CesarBraz7/noema/internal/adapters/video"
 )
 
@@ -26,16 +27,17 @@ const (
 	videoCaptionFallbackVersion     = "youtube-caption-fallback-v1"
 	videoConsolidationVersion       = "youtube-excerpts-v2"
 	videoVisualConsolidationVersion = "youtube-excerpts-visual-v1"
+	manifestNotePrefix              = "- Manifesto de evidências no repositório de artefatos `"
 )
 
 type sourceContent struct {
-	SchemaVersion   string     `json:"schemaVersion"`
-	SourceID        string     `json:"sourceId"`
-	Source          metadata   `json:"source"`
-	Capture         capture    `json:"capture"`
-	Blocks          []block    `json:"blocks"`
-	TranscriptParts []artifact `json:"transcriptParts,omitempty"`
-	Media           []struct{} `json:"media"`
+	SchemaVersion   string            `json:"schemaVersion"`
+	SourceID        string            `json:"sourceId"`
+	Source          metadata          `json:"source"`
+	Capture         capture           `json:"capture"`
+	Blocks          []block           `json:"blocks"`
+	TranscriptParts []artifact        `json:"transcriptParts,omitempty"`
+	Media           []instagram.Asset `json:"media"`
 }
 
 type metadata struct {
@@ -43,6 +45,7 @@ type metadata struct {
 	ResolvedURL     string          `json:"resolvedUrl,omitempty"`
 	Type            string          `json:"type"`
 	Platform        string          `json:"platform"`
+	Format          string          `json:"format,omitempty"`
 	Title           string          `json:"title"`
 	Author          string          `json:"author,omitempty"`
 	PublishedAt     string          `json:"publishedAt,omitempty"`
@@ -66,11 +69,12 @@ type capture struct {
 }
 
 type block struct {
-	ID      string `json:"id"`
-	Kind    string `json:"kind"`
-	Text    string `json:"text"`
-	StartMS *int64 `json:"startMs,omitempty"`
-	EndMS   *int64 `json:"endMs,omitempty"`
+	ID            string `json:"id"`
+	Kind          string `json:"kind"`
+	Text          string `json:"text"`
+	StartMS       *int64 `json:"startMs,omitempty"`
+	EndMS         *int64 `json:"endMs,omitempty"`
+	MediaPosition int    `json:"mediaPosition,omitempty"`
 }
 
 func newSource(id, canonical string, doc article.Document, now time.Time) sourceContent {
@@ -83,7 +87,7 @@ func newSource(id, canonical string, doc article.Document, now time.Time) source
 		date = ""
 	}
 	source := sourceContent{
-		SchemaVersion: schemaVersion, SourceID: id, Media: []struct{}{},
+		SchemaVersion: schemaVersion, SourceID: id, Media: []instagram.Asset{},
 		Source: metadata{
 			URL: canonical, ResolvedURL: doc.URL, Type: "article", Platform: "web", Title: title,
 			Author: strings.TrimSpace(doc.Author), PublishedAt: date, CapturedAt: now.UTC().Truncate(time.Second),
@@ -100,7 +104,7 @@ func newSource(id, canonical string, doc article.Document, now time.Time) source
 
 func newVideoMetadata(id string, doc video.Capture, now time.Time) sourceContent {
 	return sourceContent{
-		SchemaVersion: schemaVersion, SourceID: id, Media: []struct{}{},
+		SchemaVersion: schemaVersion, SourceID: id, Media: []instagram.Asset{},
 		Source: metadata{
 			URL: doc.URL, Type: "video", Platform: "youtube", Title: strings.TrimSpace(doc.Title),
 			Author: strings.TrimSpace(doc.Channel), PublishedAt: doc.PublishedAt,
@@ -151,6 +155,7 @@ func timedBlocks(segments []video.Segment) []block {
 type knowledge struct {
 	SchemaVersion   string           `json:"schemaVersion"`
 	SourceID        string           `json:"sourceId"`
+	SourceType      string           `json:"sourceType,omitempty"`
 	FocusNote       string           `json:"focusNote,omitempty"`
 	Title           string           `json:"title"`
 	Language        string           `json:"language"`
@@ -263,6 +268,14 @@ func consolidate(source sourceContent, focus string) knowledge {
 		FocusNote: focus, Language: "pt-BR", Method: "extractive",
 		Coverage: coverage{Status: "partial", Unresolved: append([]string{limitation}, source.Capture.Missing...)},
 	}
+	if source.Source.Type == "instagram" {
+		result.SourceType = "instagram"
+		result.Coverage.Unresolved[0] = "Os trechos refletem o material capturado, incluindo texto reconhecido automaticamente quando disponível."
+	}
+	result.Insights = []insight{}
+	if len(source.Blocks) == 0 {
+		return result
+	}
 	focusWords := make(map[string]bool)
 	for _, word := range words(focus) {
 		if len([]rune(word)) >= 4 && word != "foco" {
@@ -303,6 +316,9 @@ func consolidate(source sourceContent, focus string) knowledge {
 		locator := fmt.Sprintf("Bloco textual %d", candidate.index+1)
 		if block.StartMS != nil && block.EndMS != nil {
 			locator = timestamp(*block.StartMS) + "–" + timestamp(*block.EndMS)
+		}
+		if block.MediaPosition > 0 {
+			locator = fmt.Sprintf("Mídia %d · %s", block.MediaPosition, locator)
 		}
 		result.Insights = append(result.Insights, insight{
 			ID: fmt.Sprintf("insight-%03d", i+1), Kind: "excerpt", Title: fmt.Sprintf("Trecho %d", i+1),
@@ -346,6 +362,9 @@ func fingerprint(parts ...string) string {
 }
 
 func requestFingerprint(sourceID, focus, visualVersion string) string {
+	if strings.HasPrefix(sourceID, instagramSourcePrefix) {
+		return fingerprint(sourceID, focus, instagram.Version)
+	}
 	if strings.HasPrefix(sourceID, videoSourcePrefix) {
 		if visualVersion != "" {
 			return fingerprint(sourceID, focus, videoRequestVersion, visualVersion)
@@ -384,8 +403,11 @@ func note(source sourceContent, knowledge knowledge, manifestPath string) []byte
 	if source.Capture.TranscriptLanguage != "" {
 		fmt.Fprintf(&body, "- Transcrição do áudio original com Whisper %s (%s)\n", markdown(source.Capture.TranscriptModel), markdown(source.Capture.TranscriptLanguage))
 	}
+	if source.Source.Type == "instagram" {
+		fmt.Fprintf(&body, "- Formato **%s**\n", markdown(source.Source.Format))
+	}
 	fmt.Fprintf(&body, "- Captura %s\n", source.Source.CapturedAt.Format(time.RFC3339))
-	fmt.Fprintf(&body, "- Manifesto de evidências no repositório de artefatos `%s`\n", manifestPath)
+	fmt.Fprintf(&body, "%s%s`\n", manifestNotePrefix, manifestPath)
 	if knowledge.FocusNote != "" {
 		fmt.Fprintf(&body, "\n## Foco da inbox\n\n%s\n", markdown(knowledge.FocusNote))
 	}
@@ -396,6 +418,9 @@ func note(source sourceContent, knowledge knowledge, manifestPath string) []byte
 				chapter.StartMS/1000, markdown(chapter.Title))
 		}
 	}
+	if source.Source.Type == "instagram" {
+		writeInstagramMedia(&body, source)
+	}
 	heading := "Trechos do artigo"
 	if source.Source.Type == "video" {
 		heading = "Trechos da legenda"
@@ -403,7 +428,12 @@ func note(source sourceContent, knowledge knowledge, manifestPath string) []byte
 	if source.Capture.Method == "whisper.cpp" {
 		heading = "Trechos da transcrição"
 	}
-	fmt.Fprintf(&body, "\n## %s\n", heading)
+	if source.Source.Type == "instagram" {
+		heading = "Trechos da publicação"
+	}
+	if len(knowledge.Insights) > 0 {
+		fmt.Fprintf(&body, "\n## %s\n", heading)
+	}
 	for _, insight := range knowledge.Insights {
 		ref := insight.Evidence[0]
 		fmt.Fprintf(&body, "\n> %s\n\n%s · `%s`\n", markdown(insight.Explanation), ref.Locator, ref.SourceBlockID)

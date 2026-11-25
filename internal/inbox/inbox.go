@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/CesarBraz7/noema/internal/adapters/instagram"
 	"github.com/CesarBraz7/noema/internal/adapters/video"
 	"golang.org/x/net/idna"
 )
@@ -21,9 +22,10 @@ var (
 )
 
 type Entry struct {
-	URL   string
-	Focus string
-	Video bool
+	URL       string
+	Focus     string
+	Video     bool
+	Instagram bool
 }
 
 // Parse accepts bare URLs, Markdown links and lists, including checked items.
@@ -64,7 +66,9 @@ func Parse(markdown string) []Entry {
 				continue
 			}
 			entry := Entry{URL: canonical}
-			if !isArticle(canonical) {
+			if instagramURL, err := instagram.CanonicalURL(canonical); err == nil {
+				entry.URL, entry.Instagram = instagramURL, true
+			} else if !isArticle(canonical) {
 				entry.URL, err = video.CanonicalURL(canonical)
 				if err != nil {
 					continue

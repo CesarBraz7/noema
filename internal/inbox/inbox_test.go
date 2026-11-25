@@ -5,6 +5,14 @@ import (
 	"testing"
 )
 
+func TestInstagramEntry(t *testing.T) {
+	entries := Parse("- https://www.instagram.com/p/DcwlZftC8OV/\n- https://www.instagram.com/reel/DcwlZftC8OV/?igsh=a\n  - Guardar o exemplo\n")
+	if len(entries) != 2 || !entries[0].Instagram || entries[0].Video || entries[0].URL != entries[1].URL ||
+		entries[1].Focus != "Guardar o exemplo" {
+		t.Fatalf("entradas inesperadas: %#v", entries)
+	}
+}
+
 func TestParseDeduplicableEntries(t *testing.T) {
 	got := Parse("<!--\n- https://example.com/example\n-->\n" +
 		"```markdown\n- https://example.com/example\n```\n" +
